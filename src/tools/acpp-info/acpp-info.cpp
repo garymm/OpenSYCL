@@ -1,29 +1,14 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2022 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
+#include <iostream>
 
 #include "hipSYCL/runtime/application.hpp"
 #include "hipSYCL/runtime/backend.hpp"
@@ -85,6 +70,11 @@ void list_device_details(rt::device_id dev, rt::backend *b,
   std::cout << " General device information:" << std::endl;
   print_info("Name", hw->get_device_name(), 2);
   print_info("Backend", b->get_name(), 2);
+  print_info("Platform",
+             "Backend " +
+                 std::to_string(static_cast<int>(b->get_unique_backend_id())) +
+                 " / Platform " + std::to_string(hw->get_platform_index()),
+             2);
   print_info("Vendor", hw->get_vendor_name(), 2);
   print_info("Arch", hw->get_device_arch(), 2);
   print_info("Driver version", hw->get_driver_version(), 2);
@@ -189,15 +179,42 @@ void list_devices(rt::runtime* rt) {
   });
 }
 
-int main() {
+void print_help(const char* exe_name)
+{
+    std::cout << "Usage: " << exe_name << " [options]\n\n";
+    std::cout << "Options:\n";
+    std::cout << "\t-h, --help              Show this message.\n";
+    std::cout << "\t-l, --list-devices      Only list backends and devices, without detailed information.\n";
+}
+
+int main(int argc, char *argv[]) {
+  bool print_device_details = true;
+  for (int arg = 1; arg < argc; arg++) {
+    const std::string current_arg{argv[arg]};
+    if (current_arg == "-h" || current_arg == "--help") {
+      print_help(argv[0]);
+      return 0;
+    }
+    else if (current_arg == "-l" || current_arg == "--list-devices") {
+      print_device_details = false;
+    }
+    else {
+      std::cerr << "Unknown option: " << argv[arg] << std::endl;
+      print_help(argv[0]);
+      return 1;
+    }
+  }
+
   rt::runtime_keep_alive_token rt_token;
   rt::runtime* rt = rt_token.get();
 
   std::cout << "=================Backend information==================="
             << std::endl;
   list_backends(rt);
-  std::cout << std::endl;
-  std::cout << "=================Device information==================="
-            << std::endl;
-  list_devices(rt);
+  if (print_device_details) {
+    std::cout << std::endl;
+    std::cout << "=================Device information==================="
+              << std::endl;
+    list_devices(rt);
+  }
 }

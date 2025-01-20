@@ -1,39 +1,21 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018, 2019 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 
 // Test workaround for https://bugs.llvm.org/show_bug.cgi?id=50383
 #include <atomic>
 #include <complex>
 
 #define BOOST_TEST_MODULE device compilation tests
-#if !defined(_WIN32) || defined(__MINGW32__)
 #define BOOST_TEST_DYN_LINK
-#endif // _WIN32
-#include <boost/test/unit_test.hpp>
+#include <boost/test/included/unit_test.hpp>
 
 #include <initializer_list>
 
@@ -382,6 +364,34 @@ BOOST_AUTO_TEST_CASE(generic_lambda_outlining) {
     };
     invoke(x);
   });
+}
+
+BOOST_AUTO_TEST_CASE(nd_range) {
+  cl::sycl::queue q;
+  cl::sycl::buffer<size_t, 1> buf(1);
+
+  {
+    q.submit([&](cl::sycl::handler& cgh) {
+      auto acc = buf.get_access<cl::sycl::access::mode::discard_write>(cgh);
+      cgh.parallel_for(cl::sycl::nd_range<1>{{1},{1}}, [=](cl::sycl::nd_item<1> item) {
+        acc[0] = 300 + item.get_global_linear_id();
+      });
+    });
+    auto acc = buf.get_access<cl::sycl::access::mode::read>();
+    BOOST_REQUIRE(acc[0] == 300);
+  }
+
+  {
+    q.submit([&](cl::sycl::handler& cgh) {
+      auto acc = buf.get_access<cl::sycl::access::mode::discard_write>(cgh);
+      cgh.parallel_for(cl::sycl::nd_range<2>{{1,1},{1,1}}, [=](cl::sycl::nd_item<2> item) {
+        acc[0] = 300 + item.get_global_linear_id();
+      });
+    });
+    auto acc = buf.get_access<cl::sycl::access::mode::read>();
+    BOOST_REQUIRE(acc[0] == 300);
+  }
+
 }
 BOOST_AUTO_TEST_SUITE_END() // NOTE: Make sure not to add anything below this line
 

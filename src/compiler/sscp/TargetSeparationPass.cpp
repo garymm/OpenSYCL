@@ -1,45 +1,35 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2022 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/sscp/TargetSeparationPass.hpp"
 #include "hipSYCL/compiler/sscp/IRConstantReplacer.hpp"
 #include "hipSYCL/compiler/sscp/KernelOutliningPass.hpp"
 #include "hipSYCL/compiler/sscp/HostKernelNameExtractionPass.hpp"
 #include "hipSYCL/compiler/sscp/AggregateArgumentExpansionPass.hpp"
 #include "hipSYCL/compiler/sscp/StdBuiltinRemapperPass.hpp"
+#include "hipSYCL/compiler/sscp/DynamicFunctionSupport.hpp"
+#include "hipSYCL/compiler/sscp/StdAtomicRemapperPass.hpp"
 #include "hipSYCL/compiler/CompilationState.hpp"
+#include "hipSYCL/compiler/cbs/IRUtils.hpp"
+#include "hipSYCL/compiler/utils/ProcessFunctionAnnotationsPass.hpp"
+#include "hipSYCL/compiler/utils/LLVMUtils.hpp"
 #include "hipSYCL/common/hcf_container.hpp"
 
 #include <cstddef>
+
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/IR/GlobalValue.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -60,7 +50,7 @@ namespace compiler {
 class Timer {
 public:
   Timer(llvm::StringRef Name, bool PrintAtDestruction = false, llvm::StringRef Description = "")
-  : Name{Name}, Print{PrintAtDestruction}, Description{Description} {
+  : Print{PrintAtDestruction}, Name{Name}, Description{Description} {
     Start = std::chrono::high_resolution_clock::now();;
     IsRunning = true;
   }
@@ -108,20 +98,25 @@ public:
 };
 
 static llvm::cl::opt<bool> SSCPEmitHcf{
-    "hipsycl-sscp-emit-hcf", llvm::cl::init(false),
-    llvm::cl::desc{"Emit HCF from hipSYCL LLVM SSCP compilation flow"}};
+    "acpp-sscp-emit-hcf", llvm::cl::init(false),
+    llvm::cl::desc{"Emit HCF from AdaptiveCpp LLVM SSCP compilation flow"}};
 
 static llvm::cl::opt<bool> PreoptimizeSSCPKernels{
-    "hipsycl-sscp-preoptimize", llvm::cl::init(false),
+    "acpp-sscp-preoptimize", llvm::cl::init(false),
     llvm::cl::desc{
         "Preoptimize SYCL kernels in LLVM IR instead of embedding unoptimized kernels and relying "
-        "on optimization at runtime. This is mainly for hipSYCL developers and NOT supported!"}};
+        "on optimization at runtime. This is mainly for AdaptiveCpp developers and NOT supported!"}};
 
-static const char *SscpIsHostIdentifier = "__hipsycl_sscp_is_host";
-static const char *SscpIsDeviceIdentifier = "__hipsycl_sscp_is_device";
-static const char *SscpHcfObjectIdIdentifier = "__hipsycl_local_sscp_hcf_object_id";
-static const char *SscpHcfObjectSizeIdentifier = "__hipsycl_local_sscp_hcf_object_size";
-static const char *SscpHcfContentIdentifier = "__hipsycl_local_sscp_hcf_content";
+static llvm::cl::opt<bool> ExportAllSymbols{
+    "acpp-sscp-export-all", llvm::cl::init(false),
+    llvm::cl::desc{
+        "(experimental) export all functions for JIT-time linking"}};
+
+static const char *SscpIsHostIdentifier = "__acpp_sscp_is_host";
+static const char *SscpIsDeviceIdentifier = "__acpp_sscp_is_device";
+static const char *SscpHcfObjectIdIdentifier = "__acpp_local_sscp_hcf_object_id";
+static const char *SscpHcfObjectSizeIdentifier = "__acpp_local_sscp_hcf_object_size";
+static const char *SscpHcfContentIdentifier = "__acpp_local_sscp_hcf_content";
 
 template<class IntT>
 IntT generateRandomNumber() {
@@ -146,6 +141,7 @@ struct KernelParam {
   std::size_t ArgByteOffset;
   std::size_t OriginalArgIndex;
   ParamType Type;
+  llvm::SmallVector<std::string> Annotations;
 };
 
 struct KernelInfo {
@@ -188,6 +184,7 @@ struct KernelInfo {
         KP.Type = PT;
         KP.ArgByteOffset = OriginalParamInfos[i].OffsetInOriginalParam;
         KP.OriginalArgIndex = OriginalParamInfos[i].OriginalParamIndex;
+        KP.Annotations = OriginalParamInfos[i].Annotations;
         this->Parameters.push_back(KP);
       }
     }
@@ -196,6 +193,7 @@ struct KernelInfo {
 
 
 std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
+                                               const std::vector<std::string>& DynamicFunctions,
                                                std::vector<KernelInfo> &KernelInfoOutput,
                                                std::vector<std::string> &ExportedSymbolsOutput,
                                                std::vector<std::string> &ImportedSymbolsOutput) {
@@ -230,6 +228,9 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
   // std math functions can be thrown away during kernel outlining.
   StdBuiltinRemapperPass SBMP;
   SBMP.run(*DeviceModule, DeviceMAM);
+  // Remap atomics
+  StdAtomicRemapperPass SAMP;
+  SAMP.run(*DeviceModule, DeviceMAM);
 
   // Fix attributes for generic IR representation
   llvm::SmallVector<llvm::Attribute::AttrKind, 16> AttrsToRemove;
@@ -245,6 +246,21 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
   StringAttrsToRemove.push_back("target-cpu");
   StringAttrsToRemove.push_back("target-features");
   StringAttrsToRemove.push_back("tune-cpu");
+
+  llvm::SmallSet<llvm::Function *, 16> AcppNoInlineFunctions;
+  utils::findFunctionsWithStringAnnotations(
+      *DeviceModule, [&](llvm::Function *F, llvm::StringRef Annotation) {
+        if (F) {
+          if (Annotation.compare("acpp_no_s1_device_inline") == 0) {
+            AcppNoInlineFunctions.insert(F);
+          }
+        }
+      });
+  for(const auto& FName : DynamicFunctions) {
+    if(auto* F = DeviceModule->getFunction(FName))
+      AcppNoInlineFunctions.insert(F);
+  }
+
   for(auto& F : *DeviceModule) {
     for(auto& A : AttrsToRemove) {
       if(F.hasFnAttribute(A))
@@ -254,14 +270,21 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
       if(F.hasFnAttribute(A))
         F.removeFnAttr(A);
     }
+
     // Need to enable inlining so that we can efficiently JIT even when
-    // the user compiles with -O0
+    // the user compiles with -O0. However, we need skip functions
+    // that have the acpp_no_s1_inline annotation.
+    bool IsAcppNoInline = AcppNoInlineFunctions.contains(&F);
     if(F.hasFnAttribute(llvm::Attribute::NoInline)) {
-      F.removeFnAttr(llvm::Attribute::NoInline);
+      if(!IsAcppNoInline)
+        F.removeFnAttr(llvm::Attribute::NoInline);
+    } else {
+      if(IsAcppNoInline)
+        F.addFnAttr(llvm::Attribute::NoInline);
     }
   }
 
-  EntrypointPreparationPass EPP;
+  EntrypointPreparationPass EPP{ExportAllSymbols};
   EPP.run(*DeviceModule, DeviceMAM);
   
   ExportedSymbolsOutput = EPP.getNonKernelOutliningEntrypoints();
@@ -282,6 +305,13 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
 
   // getOutlinigEntrypoints() returns both kernels as well as non-kernel (i.e. SYCL_EXTERNAL)
   // entrypoints
+
+  S2IRConstant::forEachS2IRConstant(*DeviceModule, [](S2IRConstant IRC){
+    // This is important to avoid GlobalOpt during Kernel outlining from removing these
+    // unitialized variables.
+    IRC.getGlobalVariable()->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalLinkage);
+  });
+
   KernelOutliningPass KP{EPP.getOutliningEntrypoints()};
   KP.run(*DeviceModule, DeviceMAM);
 
@@ -293,7 +323,7 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
       // if they are not defined, not an intrinsic and don't start with
       // __ like our hipSYCL builtins. This is a hack, it would
       // be better if we could tell clang to annotate the declaration for us :(
-      if(!F.isIntrinsic() && !F.getName().startswith("__"))
+      if(!F.isIntrinsic() && !llvmutils::starts_with(F.getName(), "__"))
         ImportedSymbolsOutput.push_back(F.getName().str());
     }
   }
@@ -322,11 +352,12 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
   return DeviceModule;
 }
 
-std::string generateHCF(llvm::Module& DeviceModule,
-                        std::size_t HcfObjectId,
-                        const std::vector<KernelInfo>& Kernels,
-                        const std::vector<std::string>& ExportedSymbols,
-                        const std::vector<std::string>& ImportedSymbols) {
+std::string
+generateHCF(llvm::Module &DeviceModule, std::size_t HcfObjectId,
+            const std::vector<KernelInfo> &Kernels, const std::vector<std::string> &ExportedSymbols,
+            const std::vector<std::string> &ImportedSymbols,
+            const std::vector<std::string> &KernelCompileFlags,
+            const std::vector<std::pair<std::string, std::string>> &KernelCompileOptions) {
 
   std::string ModuleContent;
   llvm::raw_string_ostream OutputStream{ModuleContent};
@@ -356,6 +387,16 @@ std::string generateHCF(llvm::Module& DeviceModule,
   for(const auto& Kernel : Kernels) {
     auto* K = KernelsNode->add_subnode(Kernel.Name);
     K->set_as_list("image-providers", {std::string{"llvm-ir.global"}});
+    
+    auto* FlagsNode = K->add_subnode("compile-flags");
+    for(const auto& F : KernelCompileFlags) {
+      FlagsNode->set(F, "1");
+    }
+    auto *OptsNode = K->add_subnode("compile-options");
+    for(const auto& O : KernelCompileOptions) {
+      OptsNode->set(O.first, O.second);
+    }
+
     auto* ParamsNode = K->add_subnode("parameters");
 
     for(std::size_t i = 0; i < Kernel.Parameters.size(); ++i) {
@@ -376,6 +417,11 @@ std::string generateHCF(llvm::Module& DeviceModule,
         TypeDescription = "other-by-value";
       }
       P->set("type", TypeDescription);
+
+      auto* AnnotationsNode = P->add_subnode("annotations");
+      for(const auto& A : ParamInfo.Annotations) {
+        AnnotationsNode->set(A, "1");
+      }
     }
   }
   
@@ -385,6 +431,9 @@ std::string generateHCF(llvm::Module& DeviceModule,
 
 llvm::PreservedAnalyses TargetSeparationPass::run(llvm::Module &M,
                                                   llvm::ModuleAnalysisManager &MAM) {
+
+  DynamicFunctionIdentifactionPass DFI;
+  DFI.run(M, MAM);
 
   {
     ScopedPrintingTimer totalTimer{"TargetSeparationPass (total)"};
@@ -405,12 +454,13 @@ llvm::PreservedAnalyses TargetSeparationPass::run(llvm::Module &M,
       
       
       Timer IRGenTimer{"generateDeviceIR", true};
-      std::unique_ptr<llvm::Module> DeviceIR =
-          generateDeviceIR(M, Kernels, ExportedSymbols, ImportedSymbols);
+      std::unique_ptr<llvm::Module> DeviceIR = generateDeviceIR(
+          M, DFI.getDynamicFunctionNames(), Kernels, ExportedSymbols, ImportedSymbols);
       IRGenTimer.stopAndPrint();
 
       Timer HCFGenTimer{"generateHCF"};
-      HcfString = generateHCF(*DeviceIR, HcfObjectId, Kernels, ExportedSymbols, ImportedSymbols);
+      HcfString = generateHCF(*DeviceIR, HcfObjectId, Kernels, ExportedSymbols, ImportedSymbols,
+                              CompilationFlags, CompilationOptions);
       HCFGenTimer.stopAndPrint();
 
       if(SSCPEmitHcf) {
@@ -425,6 +475,22 @@ llvm::PreservedAnalyses TargetSeparationPass::run(llvm::Module &M,
       ScopedPrintingTimer Timer {"HostKernelNameExtractionPass"};
       HostKernelNameExtractionPass KernelNamingPass;
       KernelNamingPass.run(M, MAM);
+    }
+
+    {
+      ScopedPrintingTimer Timer {"Host-side dynamic function handling"};
+
+      HostSideDynamicFunctionHandlerPass HDFH{DFI.getDynamicFunctionNames(),
+                                              DFI.getDynamicFunctionDefinitionNames()};
+
+      HDFH.run(M, MAM);
+
+      // Remove argument_used hints, which are no longer needed once IR
+      // has been generated. This is primarily needed for dynamic functions.
+      // TODO: We should consider whether it might make more sense to move this to late-stage
+      // JIT, at least for the device part.
+      utils::ProcessFunctionAnnotationPass PFA({"argument_used"});
+      PFA.run(M, MAM);
     }
 
     {
@@ -443,6 +509,26 @@ llvm::PreservedAnalyses TargetSeparationPass::run(llvm::Module &M,
     }
   }
   return llvm::PreservedAnalyses::none();
+}
+
+TargetSeparationPass::TargetSeparationPass(const std::string &KernelCompilationOptions) {
+  llvm::StringRef Opts{KernelCompilationOptions};
+
+  llvm::SmallVector<llvm::StringRef> Fragments;
+  Opts.split(Fragments, ',', -1, false);
+
+  for(auto& S : Fragments) {
+    if(S.contains("=")) {
+      llvm::SmallVector<llvm::StringRef> OptionFragments;
+      S.split(OptionFragments, '=', 1, false);
+      if(OptionFragments.size() == 2) {
+        CompilationOptions.push_back(
+            std::make_pair(std::string{OptionFragments[0]}, std::string{OptionFragments[1]}));
+      }
+    } else {
+      CompilationFlags.push_back(std::string{S});
+    }
+  }
 }
 }
 }

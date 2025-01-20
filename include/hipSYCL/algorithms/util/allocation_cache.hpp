@@ -1,32 +1,13 @@
-
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_ALGORITHM_UTIL_ALLOCATION_CACHE_HPP
 #define HIPSYCL_ALGORITHM_UTIL_ALLOCATION_CACHE_HPP
 
@@ -72,10 +53,10 @@ public:
     std::lock_guard<std::mutex> lock{_mutex};
     
     for(auto& allocation : _allocations) {
-      _rt.get()->backends()
+      auto* allocator = _rt.get()->backends()
           .get(allocation.dev.get_backend())
-          ->get_allocator(allocation.dev)
-          ->free(allocation.ptr);
+          ->get_allocator(allocation.dev);
+      rt::deallocate(allocator, allocation.ptr);
     }
     _allocations.clear();
   }
@@ -93,12 +74,12 @@ private:
                        ->get_allocator(dev);
 
       if(_alloc_type == allocation_type::device)
-        result.ptr = allocator->allocate(min_alignment, min_size);
+        result.ptr = rt::allocate_device(allocator, min_alignment, min_size);
       else if(_alloc_type == allocation_type::shared)
-        result.ptr = allocator->allocate_usm(min_size);
+        result.ptr = rt::allocate_shared(allocator, min_size);
       else
         result.ptr =
-            allocator->allocate_optimized_host(min_alignment, min_size);
+            rt::allocate_host(allocator, min_alignment, min_size);
     }
     return result;
   }
@@ -165,7 +146,7 @@ public:
 
   allocation_group(allocation_cache *parent_cache, const sycl::device &dev)
       : _parent{parent_cache},
-        _dev{dev.hipSYCL_device_id()} {}
+        _dev{dev.AdaptiveCpp_device_id()} {}
 
   allocation_group() = default;
   allocation_group(const allocation_group&) = delete;

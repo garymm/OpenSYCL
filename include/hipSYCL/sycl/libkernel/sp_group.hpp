@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_SP_GROUP_HPP
 #define HIPSYCL_SP_GROUP_HPP
 
@@ -168,39 +151,39 @@ struct sp_group
   
   static constexpr memory_scope fence_scope = memory_scope::work_group;
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::id<dimensions> get_group_id() const noexcept {
     return _grp.get_group_id();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_group_id(int dimension) const noexcept {
     return _grp.get_group_id(dimension);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_group_linear_id() const noexcept {
     return _grp.get_group_linear_id();
   }
 
   /// \return The number of groups
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_group_range() const noexcept {
     return _grp.get_group_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_group_range(int dimension) const noexcept {
     return _grp.get_group_range(dimension);
   }
 
   /// \return The overall number of groups
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_group_linear_range() const noexcept {
     return _grp.get_group_linear_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t operator[](int dimension) const noexcept {
     return get_group_id(dimension);
   }
@@ -217,10 +200,10 @@ struct sp_group
 
   id_type
   get_logical_local_id(const detail::sp_item<dimensions> &idx) const noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       return idx.get_global_id() - get_group_id() * get_logical_local_range();
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       return _grp.get_local_id();
     );
   }
@@ -233,11 +216,11 @@ struct sp_group
 
   size_t get_logical_local_id(const detail::sp_item<dimensions> &idx,
                               int dimension) const noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       return idx.get_global_id(dimension) -
              get_group_id(dimension) * get_logical_local_range(dimension);
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       return _grp.get_local_id(dimension);
     );
   }
@@ -257,89 +240,89 @@ struct sp_group
   }
 
   [[deprecated("Use get_physical_local_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_local_id() const noexcept {
     return get_physical_local_id();
   }
 
   [[deprecated("Use get_physical_local_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_local_id(int dimension) const noexcept {
     return get_physical_local_id(dimension);
   }
 
   [[deprecated("Use get_physical_local_linear_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_id_type get_local_linear_id() const noexcept {
     return get_physical_local_linear_id();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_physical_local_id() const noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       return id_type{};
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       return _grp.get_local_id();
     );
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_id(int dimension) const noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       return 0;
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       return _grp.get_local_id(dimension);
     );
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_linear_id() const noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       return 0;
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       return _grp.get_local_linear_id();
     );
   }
 
   [[deprecated("Use get_logical_local_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_local_range() const noexcept {
     return get_logical_local_range();
   }
 
   [[deprecated("Use get_logical_local_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_range(int dimension) const noexcept {
     return get_logical_local_range(dimension);
   }
 
   [[deprecated("Use get_logical_local_linear_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_linear_range() const noexcept {
     return get_logical_local_linear_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_logical_local_range() const noexcept {
     return _grp.get_local_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_range(int dimension) const noexcept {
     return _grp.get_local_range(dimension);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_linear_range() const noexcept {
     return _grp.get_local_linear_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_physical_local_range() const noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       if constexpr(dimensions == 1) {
         return sycl::range{1};
       } else if constexpr(dimensions == 2) {
@@ -348,64 +331,64 @@ struct sp_group
         return sycl::range{1,1,1};
       }
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       return _grp.get_local_range();
     );
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_range(int dimension) const noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       return 1;
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       _grp.get_local_range(dimension);
     );
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_linear_range() const noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       return 1;
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       return _grp.get_local_linear_range();
     );
   }
 
   template <typename dataT>
-  HIPSYCL_KERNEL_TARGET device_event
+  ACPP_KERNEL_TARGET device_event
   async_work_group_copy(local_ptr<dataT> dest, global_ptr<dataT> src,
                         size_t numElements) const noexcept {
     return _grp.async_work_group_copy(dest, src, numElements);
   }
 
   template <typename dataT>
-  HIPSYCL_KERNEL_TARGET device_event
+  ACPP_KERNEL_TARGET device_event
   async_work_group_copy(global_ptr<dataT> dest, local_ptr<dataT> src,
                         size_t numElements) const noexcept {
     return _grp.async_work_group_copy(dest, src, numElements);
   }
 
   template <typename dataT>
-  HIPSYCL_KERNEL_TARGET device_event
+  ACPP_KERNEL_TARGET device_event
   async_work_group_copy(local_ptr<dataT> dest, global_ptr<dataT> src,
                         size_t numElements, size_t srcStride) const noexcept {
     return _grp.async_work_group_copy(dest, src, numElements, srcStride);
   }
 
   template <typename dataT>
-  HIPSYCL_KERNEL_TARGET device_event
+  ACPP_KERNEL_TARGET device_event
   async_work_group_copy(global_ptr<dataT> dest, local_ptr<dataT> src,
                         size_t numElements, size_t destStride) const noexcept {
     return _grp.async_work_group_copy(dest, src, numElements, destStride);
   }
 
   template <typename... eventTN>
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   void wait_for(eventTN...) const noexcept {}
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   bool leader() const noexcept {
     return _grp.leader();
   }
@@ -413,7 +396,7 @@ struct sp_group
   // Does not need to be private to be non-user constructible since
   // group<> is not user-constructible and the user cannot get a group<>
   // object in scoped parallelism.
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sp_group(const group<dimensions>& grp)
   : _grp{grp} {}
 private:
@@ -439,38 +422,38 @@ public:
       : _group_id{group_idx}, _num_groups{num_groups}, _global_offset{
                                                            global_offset} {}
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_group_id() const noexcept {
     return _group_id;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_group_id(int dimension) const noexcept {
     return _group_id[dimension];
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_id_type get_group_linear_id() const noexcept {
     return detail::linear_id<dimensions>::get(get_group_id(),
                                               get_group_range());
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t operator[](int dimension) const noexcept {
     return get_group_id(dimension);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_range_type get_group_linear_range() const noexcept {
     return _num_groups.size();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range_type get_group_range() const noexcept {
     return _num_groups;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   bool leader() const noexcept {
     return true;
   }
@@ -509,57 +492,57 @@ public:
   }
 
   [[deprecated("Use get_physical_local_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_local_id() const noexcept {
     return get_physical_local_id();
   }
 
   [[deprecated("Use get_physical_local_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_local_id(int dimension) const noexcept {
     return get_physical_local_id(dimension);
   }
 
   [[deprecated("Use get_physical_local_linear_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_id_type get_local_linear_id() const noexcept {
     return get_physical_local_linear_id();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_physical_local_id() const noexcept {
     return id_type{};
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_id(int dimension) const noexcept {
     return 0;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_linear_id() const noexcept {
     return 0;
   }
 
   [[deprecated("Use get_logical_local_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_local_range() const noexcept {
     return get_logical_local_range();
   }
 
   [[deprecated("Use get_logical_local_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_range(int dimension) const noexcept {
     return get_logical_local_range(dimension);
   }
 
   [[deprecated("Use get_logical_local_linear_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_linear_range() const noexcept {
     return get_logical_local_linear_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_logical_local_range() const noexcept {
     range_type r;
     for(int i = 0; i < dimensions; ++i)
@@ -567,17 +550,17 @@ public:
     return r;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_range(int dimension) const noexcept {
     return 1;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_linear_range() const noexcept {
     return 1;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_physical_local_range() const noexcept {
     if constexpr(dimensions == 1) {
       return sycl::range{1};
@@ -588,12 +571,12 @@ public:
     }
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_range(int dimension) const noexcept {
     return 1;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_linear_range() const noexcept {
     return 1;
   }
@@ -653,43 +636,43 @@ public:
   }
 
   [[deprecated("Use get_physical_local_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_local_id() const noexcept {
     return get_physical_local_id();
   }
 
   [[deprecated("Use get_physical_local_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_local_id(int dimension) const noexcept {
     return get_physical_local_id(dimension);
   }
 
   [[deprecated("Use get_physical_local_linear_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_id_type get_local_linear_id() const noexcept {
     return get_physical_local_linear_id();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_linear_id() const noexcept {
     return detail::linear_id<dimensions>::get(get_physical_local_id(),
                                               get_physical_local_range());
   }
 
   [[deprecated("Use get_logical_local_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_local_range() const noexcept {
     return get_logical_local_range();
   }
 
   [[deprecated("Use get_logical_local_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_range(int dimension) const noexcept {
     return get_logical_local_range(dimension);
   }
 
   [[deprecated("Use get_logical_local_linear_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_linear_range() const noexcept {
     return get_logical_local_linear_range();
   }
@@ -704,7 +687,7 @@ public:
     return get_physical_local_id(dimension);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_physical_local_id() const noexcept {
     const size_t subgroup_lid = sycl::sub_group{}.get_local_linear_id();
 
@@ -717,7 +700,7 @@ public:
     }
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_id(int dimension) const noexcept {
     if constexpr(dimensions == 1) {
       return sycl::sub_group{}.get_local_linear_id();
@@ -730,22 +713,22 @@ public:
     }
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_logical_local_range() const noexcept {
     return get_physical_local_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_range(int dimension) const noexcept {
     return get_physical_local_range(dimension);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_linear_range() const noexcept {
     return get_physical_local_linear_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range_type get_physical_local_range() const noexcept {
     if constexpr (dimensions == 1) {
       return range_type{sycl::sub_group{}.get_local_linear_range()};
@@ -758,7 +741,7 @@ public:
     }
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_range(int dimension) const noexcept {
     if constexpr (dimensions == 1) {
       return sycl::sub_group{}.get_local_linear_range();
@@ -771,13 +754,13 @@ public:
     }
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_linear_range() const noexcept {
     return sycl::sub_group{}.get_local_linear_range();
   }
 
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_group_id() const noexcept {
     const size_t group_id = get_group_linear_id();
 
@@ -790,7 +773,7 @@ public:
     }
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_group_id(int dimension) const noexcept {
     if constexpr(dimensions == 1){
       return get_group_linear_id();
@@ -802,22 +785,22 @@ public:
     }
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_id_type get_group_linear_id() const noexcept {
     return sycl::sub_group{}.get_group_linear_id();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_range_type get_group_linear_range() const noexcept {
     return sycl::sub_group{}.get_group_linear_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range_type get_group_range() const noexcept {
     return sycl::sub_group{}.get_group_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_group_range(int dimension) const noexcept {
     if(dimension == dimensions - 1)
       return sycl::sub_group{}.get_group_linear_range();
@@ -825,7 +808,7 @@ public:
       return 1;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   bool leader() const noexcept {
     return sycl::sub_group{}.leader();
   }
@@ -877,43 +860,43 @@ public:
   }
 
   [[deprecated("Use get_physical_local_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_local_id() const noexcept {
     return get_physical_local_id();
   }
 
   [[deprecated("Use get_physical_local_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_local_id(int dimension) const noexcept {
     return get_physical_local_id(dimension);
   }
 
   [[deprecated("Use get_physical_local_linear_id()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_id_type get_local_linear_id() const noexcept {
     return get_physical_local_linear_id();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_linear_id() const noexcept {
     return detail::linear_id<dimensions>::get(get_physical_local_id(),
                                               get_physical_local_range());
   }
 
   [[deprecated("Use get_logical_local_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_local_range() const noexcept {
     return get_logical_local_range();
   }
 
   [[deprecated("Use get_logical_local_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_range(int dimension) const noexcept {
     return get_logical_local_range(dimension);
   }
 
   [[deprecated("Use get_logical_local_linear_range()")]]
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_linear_range() const noexcept {
     return get_logical_local_linear_range();
   }
@@ -928,83 +911,83 @@ public:
     return idx.get_global_id(dimension) - _global_offset[dimension];
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_physical_local_id() const noexcept {
     return id_type{};
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_id(int dimension) const noexcept {
     return 0;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   sycl::range<dimensions> get_logical_local_range() const noexcept {
     return PropertyDescriptor::get_fixed_group_size();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_range(int dimension) const noexcept {
     return get_logical_local_range()[dimension];
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_linear_range() const noexcept {
     return get_logical_local_range().size();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range_type get_physical_local_range() const noexcept {
     return range_type{};
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_range(int dimension) const noexcept {
     return 1;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_linear_range() const noexcept {
     return 1;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id_type get_group_id() const noexcept {
     return _group_id;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_group_id(int dimension) const noexcept {
     return _group_id[dimension];
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t operator[](int dimension) const noexcept {
     return get_group_id(dimension);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_id_type get_group_linear_id() const noexcept {
     return detail::linear_id<dimensions>::get(get_group_id(),
                                               get_group_range());
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   linear_range_type get_group_linear_range() const noexcept {
     return _num_groups.size();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range_type get_group_range() const noexcept {
     return _num_groups;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_group_range(int dimension) const noexcept {
     return _num_groups[dimension];
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   bool leader() const noexcept {
     return get_local_linear_id() == 0;
   }
@@ -1030,21 +1013,21 @@ template<class G>
 inline constexpr bool is_sp_group_v = is_sp_group<G>::value;
 
 template <class PropertyDescriptor>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 auto get_group_global_id_offset(
     const sp_group<PropertyDescriptor> &g) noexcept {
   return g.get_group_id() * g.get_logical_local_range();
 }
 
 template <class PropertyDescriptor>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 auto get_group_global_id_offset(
     const sp_sub_group<PropertyDescriptor> &g) noexcept {
   return g.get_global_group_offset();
 }
 
 template <class PropertyDescriptor>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 auto get_group_global_id_offset(
     const sp_scalar_group<PropertyDescriptor> &g) noexcept {
   return g.get_global_group_offset();
@@ -1064,19 +1047,19 @@ private:
   };
 
 public:
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   static sycl::range<Dim> get_global_range() noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       return storage::get().global_range;
     );
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       return detail::get_global_size<Dim>();
     );
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   static void configure_global_range(const sycl::range<Dim> &range) noexcept {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       storage::get().global_range = range;
     );
   }
@@ -1088,7 +1071,7 @@ public:
 /// is not the case for a scalar group that was created from a non-scalar
 /// group.
 template<class PropertyDescriptor, class NestedF>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 inline void subdivide_group(
   const sp_scalar_group<PropertyDescriptor>& g, NestedF f) noexcept {
   
@@ -1108,7 +1091,7 @@ inline void subdivide_group(
 /// Subdivide a subgroup. Currently, this subdivides
 /// into scalar groups on both device and host.
 template<class PropertyDescriptor, class NestedF>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 inline  void subdivide_group(
   const sp_sub_group<PropertyDescriptor>& g, NestedF f) noexcept {
  
@@ -1125,7 +1108,7 @@ inline  void subdivide_group(
     // of the new "groups" is just the global id of the work item
     // which can always be obtained from the global offset
     // and local id.
-    __hipsycl_if_target_device(
+    __acpp_if_target_device(
       sycl::id<dim> subgroup_global_offset =
           get_group_global_id_offset(g) + g.get_physical_local_id();
       
@@ -1136,7 +1119,7 @@ inline  void subdivide_group(
       f(subgroup);
     );
   } else {
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       // On CPU, we need to iterate now across all elements of this subgroup
       // to construct scalar groups.
       if constexpr(next_property_descriptor::has_scalar_fixed_group_size()){
@@ -1160,7 +1143,7 @@ inline  void subdivide_group(
 
 /// Subdivide a work group into sub_group
 template<class PropertyDescriptor, class NestedF>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 inline  void subdivide_group(
   const sp_group<PropertyDescriptor>& g, NestedF f) noexcept {
  
@@ -1213,7 +1196,7 @@ inline  void subdivide_group(
 }
 
 template <class PropertyDescriptor, typename NestedF>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 void distribute_items(const sp_scalar_group<PropertyDescriptor> &g,
                       NestedF f) noexcept {
   f(make_sp_item(sycl::id<PropertyDescriptor::dimensions>{},
@@ -1222,16 +1205,16 @@ void distribute_items(const sp_scalar_group<PropertyDescriptor> &g,
 }
 
 template <class PropertyDescriptor, typename NestedF>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 void distribute_items(const sp_sub_group<PropertyDescriptor> &g,
                       NestedF f) noexcept {
-  __hipsycl_if_target_device(
+  __acpp_if_target_device(
     f(make_sp_item(g.get_physical_local_id(),
                   get_group_global_id_offset(g) + g.get_physical_local_id(),
                   g.get_logical_local_range(),
       sp_global_kernel_state<PropertyDescriptor::dimensions>::get_global_range()));
   );
-  __hipsycl_if_target_host(
+  __acpp_if_target_host(
     auto global_range = sp_global_kernel_state<
             PropertyDescriptor::dimensions>::get_global_range();
 
@@ -1244,16 +1227,16 @@ void distribute_items(const sp_sub_group<PropertyDescriptor> &g,
 }
 
 template<class PropertyDescriptor, typename NestedF>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 void distribute_items(const sp_group<PropertyDescriptor>& g, NestedF&& f) noexcept {
   auto global_range = g.get_logical_local_range() * g.get_group_range();
 
-  __hipsycl_if_target_device(
+  __acpp_if_target_device(
     f(make_sp_item(g.get_physical_local_id(),
                   get_group_global_id_offset(g) + g.get_physical_local_id(),
                   g.get_logical_local_range(), global_range));
   );
-  __hipsycl_if_target_host(
+  __acpp_if_target_host(
     const auto group_offset = get_group_global_id_offset(g);
     const auto local_range = g.get_logical_local_range();
 
@@ -1275,52 +1258,52 @@ using s_group = detail::sp_group<PropertyDescriptor>;
 
 // TODO: SPIR-V
 template <class PropertyDescriptor>
-HIPSYCL_KERNEL_TARGET inline void
+ACPP_KERNEL_TARGET inline void
 group_barrier(const detail::sp_group<PropertyDescriptor> &g,
               memory_scope fence_scope =
                   detail::sp_group<PropertyDescriptor>::fence_scope) {
-  __hipsycl_if_target_hiplike(
+  __acpp_if_target_hiplike(
     if (fence_scope == memory_scope::device) {
       __threadfence_system();
     }
     __syncthreads();
   );
-  __hipsycl_if_target_spirv(/* todo */);
-  __hipsycl_if_target_host(/* todo */);
+  __acpp_if_target_sscp(/* todo */);
+  __acpp_if_target_host(/* todo */);
 }
 
 template <class PropertyDescriptor>
-HIPSYCL_KERNEL_TARGET inline void
+ACPP_KERNEL_TARGET inline void
 group_barrier(const detail::sp_sub_group<PropertyDescriptor> &g,
               memory_scope fence_scope =
                   detail::sp_sub_group<PropertyDescriptor>::fence_scope) {
 
-  __hipsycl_if_target_hiplike(
+  __acpp_if_target_hiplike(
     if (fence_scope == memory_scope::device) {
       __threadfence_system();
     } else if (fence_scope == memory_scope::work_group) {
       __threadfence_block();
     }
   );
-  __hipsycl_if_target_cuda(
+  __acpp_if_target_cuda(
     __syncwarp();
   );
-  __hipsycl_if_target_spirv(/* todo */);
-  __hipsycl_if_target_host(/* todo */);
+  __acpp_if_target_sscp(/* todo */);
+  __acpp_if_target_host(/* todo */);
 }
 
 // Direct overload instead of default argument for memory fence
 // can be used to optimize the if statement away at compile time
 template <class PropertyDescriptor>
-HIPSYCL_KERNEL_TARGET inline void
+ACPP_KERNEL_TARGET inline void
 group_barrier(const detail::sp_scalar_group<PropertyDescriptor> &g) {}
 
 template <class PropertyDescriptor>
-HIPSYCL_KERNEL_TARGET inline void
+ACPP_KERNEL_TARGET inline void
 group_barrier(const detail::sp_scalar_group<PropertyDescriptor> &g,
               memory_scope fence_scope) {
 
-  __hipsycl_if_target_hiplike(
+  __acpp_if_target_hiplike(
     if (fence_scope == memory_scope::device) {
       __threadfence_system();
     } else if (fence_scope == memory_scope::work_group) {
@@ -1332,14 +1315,14 @@ group_barrier(const detail::sp_scalar_group<PropertyDescriptor> &g,
 
 template <class Group, class Func,
           std::enable_if_t<detail::is_sp_group_v<std::decay_t<Group>>, int> = 0>
-HIPSYCL_KERNEL_TARGET inline void distribute_items(const Group &g,
+ACPP_KERNEL_TARGET inline void distribute_items(const Group &g,
                                                    Func f) noexcept {
   detail::distribute_items(g, f);
 }
 
 template <class Group, class Func,
           std::enable_if_t<detail::is_sp_group_v<std::decay_t<Group>>, int> = 0>
-HIPSYCL_KERNEL_TARGET inline void distribute_items_and_wait(const Group &g,
+ACPP_KERNEL_TARGET inline void distribute_items_and_wait(const Group &g,
                                                             Func f) noexcept {
   detail::distribute_items(g, f);
   group_barrier(g);
@@ -1347,14 +1330,14 @@ HIPSYCL_KERNEL_TARGET inline void distribute_items_and_wait(const Group &g,
 
 template <class Group, class Func,
           std::enable_if_t<detail::is_sp_group_v<std::decay_t<Group>>, int> = 0>
-HIPSYCL_KERNEL_TARGET inline void distribute_groups(const Group &g,
+ACPP_KERNEL_TARGET inline void distribute_groups(const Group &g,
                                                     Func f) noexcept {
   detail::subdivide_group(g, f);
 }
 
 template <class Group, class Func,
           std::enable_if_t<detail::is_sp_group_v<std::decay_t<Group>>, int> = 0>
-HIPSYCL_KERNEL_TARGET inline void distribute_groups_and_wait(const Group &g,
+ACPP_KERNEL_TARGET inline void distribute_groups_and_wait(const Group &g,
                                                              Func f) noexcept {
   detail::subdivide_group(g, f);
   group_barrier(g);
@@ -1362,14 +1345,14 @@ HIPSYCL_KERNEL_TARGET inline void distribute_groups_and_wait(const Group &g,
 
 template <class Group, class Func,
           std::enable_if_t<detail::is_sp_group_v<std::decay_t<Group>>, int> = 0>
-HIPSYCL_KERNEL_TARGET inline void single_item(const Group &g, Func f) noexcept {
+ACPP_KERNEL_TARGET inline void single_item(const Group &g, Func f) noexcept {
   if (g.leader())
     f();
 }
 
 template <class Group, class Func,
           std::enable_if_t<detail::is_sp_group_v<std::decay_t<Group>>, int> = 0>
-HIPSYCL_KERNEL_TARGET inline void single_item_and_wait(const Group &g,
+ACPP_KERNEL_TARGET inline void single_item_and_wait(const Group &g,
                                                        Func f) noexcept {
   if (g.leader())
     f();

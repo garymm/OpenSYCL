@@ -1,29 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018-2020 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 
 
 #include "hipSYCL/sycl/libkernel/accessor.hpp"
@@ -32,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -238,6 +223,18 @@ BOOST_AUTO_TEST_CASE(accessor_api) {
   la1.swap(la1_copy);
   la2.swap(la2_copy);
   la3.swap(la3_copy);
+
+  // Test max_size
+  {
+    s::accessor<int, 1> acc;
+    s::host_accessor<int, 1> hacc;
+    s::local_accessor<int, 1> lacc;
+
+    const auto expected = std::numeric_limits<std::ptrdiff_t>::max();
+    BOOST_REQUIRE(acc.max_size() == expected);
+    BOOST_REQUIRE(hacc.max_size() == expected);
+    BOOST_REQUIRE(lacc.max_size() == expected);
+  }
 }
 
 BOOST_AUTO_TEST_CASE(nested_subscript) {
@@ -349,7 +346,7 @@ BOOST_AUTO_TEST_CASE(accessor_simplifications) {
     s::accessor acc1{buff, cgh, s::read_only};
     BOOST_CHECK(!acc1.is_placeholder());
     
-#ifdef HIPSYCL_EXT_ACCESSOR_VARIANT_DEDUCTION
+#ifdef ACPP_EXT_ACCESSOR_VARIANT_DEDUCTION
     // Conversion rw accessor<int> -> accessor<const int>, read-only
     s::accessor<const int> acc2 = s::accessor<int>{buff, cgh};
     s::accessor acc3{buff, cgh, s::read_only};
@@ -850,6 +847,27 @@ BOOST_AUTO_TEST_CASE(offset_nested_subscript) {
         expected[i*N+j] = 1;
 
   BOOST_CHECK(data == expected);
+}
+
+BOOST_AUTO_TEST_CASE(zero_dim_accessor) {
+  namespace s = cl::sycl;
+
+  int val = 1;
+  {
+    s::buffer<int,1> buf{&val, 1};
+
+    s::queue q;
+    q.submit([&](auto &h){
+      s::accessor<int, 0> acc{buf, h};
+
+      h.single_task([=]() {
+        int &ref = acc;
+        ref = 123;
+      });
+    });
+  }
+
+  BOOST_CHECK(val == 123);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

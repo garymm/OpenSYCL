@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2020 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_USM_HPP
 #define HIPSYCL_USM_HPP
 
@@ -52,7 +35,8 @@ namespace sycl {
 
 inline void *malloc_device(size_t num_bytes, const device &dev,
                            const context &ctx) {
-  return detail::select_device_allocator(dev)->allocate(0, num_bytes);
+  return rt::allocate_device(detail::select_device_allocator(dev), 0,
+                             num_bytes);
 }
 
 template <typename T>
@@ -72,7 +56,7 @@ T* malloc_device(std::size_t count, const queue &q) {
 
 inline void *aligned_alloc_device(std::size_t alignment, std::size_t num_bytes,
                                   const device &dev, const context &ctx) {
-  return detail::select_device_allocator(dev)->allocate(alignment, num_bytes);
+  return rt::allocate_device(detail::select_device_allocator(dev), alignment, num_bytes);
 }
 
 template <typename T>
@@ -96,7 +80,7 @@ T *aligned_alloc_device(std::size_t alignment, std::size_t count,
 // Restricted USM
 
 inline void *malloc_host(std::size_t num_bytes, const context &ctx) {
-  return detail::select_usm_allocator(ctx)->allocate_optimized_host(0, num_bytes);
+  return rt::allocate_host(detail::select_usm_allocator(ctx), 0, num_bytes);
 }
 
 template <typename T> T *malloc_host(std::size_t count, const context &ctx) {
@@ -113,7 +97,7 @@ template <typename T> T *malloc_host(std::size_t count, const queue &q) {
 
 inline void *malloc_shared(std::size_t num_bytes, const device &dev,
                            const context &ctx) {
-  return detail::select_usm_allocator(ctx, dev)->allocate_usm(num_bytes);
+  return rt::allocate_shared(detail::select_usm_allocator(ctx, dev), num_bytes);
 }
 
 template <typename T>
@@ -131,8 +115,8 @@ template <typename T> T *malloc_shared(std::size_t count, const queue &q) {
 
 inline void *aligned_alloc_host(std::size_t alignment, std::size_t num_bytes,
                                 const context &ctx) {
-  return detail::select_usm_allocator(ctx)->allocate_optimized_host(alignment,
-                                                                    num_bytes);
+  return rt::allocate_host(detail::select_usm_allocator(ctx), alignment,
+                           num_bytes);
 }
 
 template <typename T>
@@ -154,7 +138,7 @@ T *aligned_alloc_host(std::size_t alignment, std::size_t count,
 
 inline void *aligned_alloc_shared(std::size_t alignment, std::size_t num_bytes,
                                   const device &dev, const context &ctx) {
-  return detail::select_usm_allocator(ctx, dev)->allocate_usm(num_bytes);
+  return rt::allocate_shared(detail::select_usm_allocator(ctx, dev), num_bytes);
 }
 
 template <typename T>
@@ -241,7 +225,7 @@ T *aligned_alloc(std::size_t alignment, std::size_t count, const sycl::queue &q,
 }
 
 inline void free(void *ptr, const sycl::context &ctx) {
-  return detail::select_usm_allocator(ctx)->free(ptr);
+  return rt::deallocate(detail::select_usm_allocator(ctx), ptr);
 }
 
 inline void free(void *ptr, const sycl::queue &q) {

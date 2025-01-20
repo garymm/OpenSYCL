@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_ALGORITHMS_MEMORY_STREAMING_HPP
 #define HIPSYCL_ALGORITHMS_MEMORY_STREAMING_HPP
 
@@ -32,6 +15,7 @@
 #include "hipSYCL/sycl/device.hpp"
 #include "hipSYCL/sycl/libkernel/nd_item.hpp"
 #include "hipSYCL/sycl/info/device.hpp"
+#include "hipSYCL/sycl/jit.hpp"
 #include <cstddef>
 
 
@@ -39,6 +23,10 @@ namespace hipsycl::algorithms::util {
 
 class data_streamer {
 public:
+  data_streamer(rt::device_id dev, std::size_t problem_size,
+                std::size_t group_size)
+      : data_streamer{sycl::device{dev}, problem_size, group_size} {}
+
   data_streamer(const sycl::device &dev, std::size_t problem_size,
                 std::size_t group_size)
       : _problem_size{problem_size}, _group_size{group_size} {
@@ -74,22 +62,33 @@ public:
   template <class F>
   static void run(std::size_t problem_size, sycl::nd_item<1> idx,
                   F &&f) noexcept {
-    
-    // TODO: This actually should be something like if_device_cpu, which
-    //  we cannot express yet.
-    __hipsycl_if_target_device(
-      const std::size_t gid = idx.get_global_id(0);
-      for (std::size_t i = gid; i < problem_size; i += idx.get_global_range(0)) {
-        f(sycl::id<1>{i});
-      }
+    __acpp_if_target_sscp(
+        namespace jit = sycl::AdaptiveCpp_jit;
+        jit::compile_if_else(
+            jit::reflect<jit::reflection_query::compiler_backend>() ==
+              jit::compiler_backend::host,
+            [&]() { run_host(problem_size, idx, f); },
+            [&]() { run_device(problem_size, idx, f); });
+
+        return;);
+    __acpp_if_target_device(
+      run_device(problem_size, idx, f);
     );
-    __hipsycl_if_target_host(
+    __acpp_if_target_host(
       run_host(problem_size, idx, f);
     );
   };
 
 private:
   static constexpr int cpu_work_per_item = 8;
+
+  template<class F>
+  static void run_device(std::size_t problem_size, sycl::nd_item<1> idx, F&& f) noexcept {
+    const std::size_t gid = idx.get_global_id(0);
+    for (std::size_t i = gid; i < problem_size; i += idx.get_global_range(0)) {
+      f(sycl::id<1>{i});
+    }
+  }
 
   template<class F>
   static void run_host(std::size_t problem_size, sycl::nd_item<1> idx, F&& f) noexcept {

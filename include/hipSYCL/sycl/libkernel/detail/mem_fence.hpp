@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018, 2019 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_MEM_FENCE_HPP
 #define HIPSYCL_MEM_FENCE_HPP
 
@@ -38,23 +21,17 @@ namespace detail {
 template<access::fence_space, access::mode>
 struct mem_fence_impl
 {
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   static void mem_fence()
   {
 
-    __hipsycl_if_target_hiplike(
+    __acpp_if_target_hiplike(
       __threadfence();
     );
-    __hipsycl_if_target_spirv(
-    __spirv_MemoryBarrier(__spv::Scope::Device,
-                          __spv::MemorySemanticsMask::SequentiallyConsistent |
-                          __spv::MemorySemanticsMask::CrossWorkgroupMemory |
-                          __spv::MemorySemanticsMask::WorkgroupMemory);
-    );
     // TODO What about CPU?
-    // Empty __hipsycl_if_target_* breaks at compile time w/ nvc++ 22.7 or
+    // Empty __acpp_if_target_* breaks at compile time w/ nvc++ 22.7 or
     // older, so comment out that statement for now.
-    //__hipsycl_if_target_host(/* todo */);
+    //__acpp_if_target_host(/* todo */);
   }
 
 };
@@ -62,18 +39,11 @@ struct mem_fence_impl
 template<access::mode M>
 struct mem_fence_impl<access::fence_space::local_space, M>
 {
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   static void mem_fence()
   {
-    __hipsycl_if_target_hiplike(
+    __acpp_if_target_hiplike(
       __threadfence_block();
-    );
-    __hipsycl_if_target_spirv(
-      __spirv_MemoryBarrier(
-          __spv::Scope::Workgroup,
-          static_cast<uint32_t>(
-              __spv::MemorySemanticsMask::SequentiallyConsistent |
-              __spv::MemorySemanticsMask::WorkgroupMemory));
     );
   }
 };
@@ -84,7 +54,7 @@ template <
   access::fence_space Fence_space = access::fence_space::global_and_local,
   access::mode Mode = access::mode::read_write
 >
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 inline void mem_fence()
 {
   static_assert(Mode == access::mode::read ||
@@ -96,7 +66,7 @@ inline void mem_fence()
 }
 
 template<access::mode Mode>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 inline void mem_fence(access::fence_space space)
 {
   if(space == access::fence_space::local_space)

@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018-2020 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_SYCL_HALF_REPRESENTATION_HPP
 #define HIPSYCL_SYCL_HALF_REPRESENTATION_HPP
 
@@ -42,7 +25,7 @@
     (defined(__arm__) && defined(HIPSYCL_ENABLE_HALF_ON_HOST)) ||              \
     (defined(__aarch64__) && defined(HIPSYCL_ENABLE_HALF_ON_HOST)) ||          \
     ((defined(__AMDGPU__) || defined(__SPIR__) || defined(__SPIR64__)) &&      \
-     (HIPSYCL_LIBKERNEL_IS_DEVICE_PASS ||                                      \
+     (ACPP_LIBKERNEL_IS_DEVICE_PASS ||                                      \
       defined(HIPSYCL_SSCP_LIBKERNEL_LIBRARY)))
 // These targets support _Float16
 #define HIPSYCL_HALF_HAS_FLOAT16_TYPE
@@ -50,7 +33,7 @@
 
 #endif
 
-#if HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_CUDA
+#if ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA
   #define HIPSYCL_HALF_HAS_CUDA_HALF_TYPE
 #endif
 
@@ -61,11 +44,11 @@ namespace hipsycl::fp16 {
 
 // Do not use a class to ensure consistent ABI between SSCP bitcode libraries
 // and client code, which will have different LLVM target triple initially.
-using half_storage = __hipsycl_uint16;
+using half_storage = __acpp_uint16;
 
 namespace detail {
 // Currently we cannot call sycl::bit_cast directly, since we do not
-// have HIPSYCL_UNIVERSAL_TARGET attributes available here, which
+// have ACPP_UNIVERSAL_TARGET attributes available here, which
 // are needed for sycl::bit_cast.
 template<class Tout, class Tin>
 Tout bit_cast(Tin x) {
@@ -76,21 +59,21 @@ Tout bit_cast(Tin x) {
 
 
 #ifdef HIPSYCL_HALF_HAS_FLOAT16_TYPE
-inline __hipsycl_uint16 native_float16_to_int(_Float16 x) noexcept {
-  return bit_cast<__hipsycl_uint16>(x);
+inline __acpp_uint16 native_float16_to_int(_Float16 x) noexcept {
+  return bit_cast<__acpp_uint16>(x);
 }
 
-static _Float16 int_to_native_float16(__hipsycl_uint16 x) noexcept {
+static _Float16 int_to_native_float16(__acpp_uint16 x) noexcept {
   return bit_cast<_Float16>(x);
 }
 #endif
 
 #ifdef HIPSYCL_HALF_HAS_CUDA_HALF_TYPE
-inline __hipsycl_uint16 cuda_half_to_int(__half x) noexcept {
-  return bit_cast<__hipsycl_uint16>(x);
+inline __acpp_uint16 cuda_half_to_int(__half x) noexcept {
+  return bit_cast<__acpp_uint16>(x);
 }
 
-inline __half int_to_cuda_half(__hipsycl_uint16 x) noexcept {
+inline __half int_to_cuda_half(__acpp_uint16 x) noexcept {
   return bit_cast<__half>(x);
 }
 #endif
@@ -123,7 +106,7 @@ inline half_storage create(double f) noexcept {
   return truncate_from(f);
 }
 
-inline half_storage create(__hipsycl_uint16 i) noexcept {
+inline half_storage create(__acpp_uint16 i) noexcept {
   return i;
 }
 
@@ -148,7 +131,7 @@ inline __half as_cuda_half(half_storage h) noexcept {
 }
 #endif
 
-inline __hipsycl_uint16 as_integer(half_storage h) noexcept {
+inline __acpp_uint16 as_integer(half_storage h) noexcept {
   return h;
 }
 

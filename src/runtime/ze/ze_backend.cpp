@@ -1,33 +1,17 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include <level_zero/ze_api.h>
 
 
+#include "hipSYCL/runtime/multi_queue_executor.hpp"
 #include "hipSYCL/runtime/ze/ze_backend.hpp"
 #include "hipSYCL/runtime/ze/ze_allocator.hpp"
 #include "hipSYCL/runtime/ze/ze_hardware_manager.hpp"
@@ -50,27 +34,40 @@ const char *hipsycl_backend_plugin_get_name() {
 namespace hipsycl {
 namespace rt {
 
+
+namespace {
+
+std::unique_ptr<multi_queue_executor>
+create_multi_queue_executor(ze_backend *b, ze_hardware_manager *mgr) {
+  return std::make_unique<multi_queue_executor>(*b, [b, mgr](device_id dev) {
+    return std::make_unique<ze_queue>(mgr,
+                                      static_cast<std::size_t>(dev.get_id()));
+  });
+}
+}
+
+
 ze_backend::ze_backend() {
   ze_result_t err = zeInit(0);
 
   if (err != ZE_RESULT_SUCCESS) {
-    print_warning(__hipsycl_here(),
+    print_warning(__acpp_here(),
                   error_info{"ze_backend: Call to zeInit() failed",
                             error_code{"ze", static_cast<int>(err)}});
   }
 
   _hardware_manager = std::make_unique<ze_hardware_manager>();
   for(std::size_t i = 0; i < _hardware_manager->get_num_devices(); ++i) {
-    _allocators.push_back(ze_allocator{
+    _allocators.push_back(ze_allocator{i,
         static_cast<ze_hardware_context *>(_hardware_manager->get_device(i)),
         _hardware_manager.get()});
   }
 
-  _executor = std::make_unique<multi_queue_executor>(
-      *this, [this](device_id dev) {
-        return std::make_unique<ze_queue>(this->_hardware_manager.get(),
-                                          dev.get_id());
-      });
+  _executor =
+      std::make_unique<lazily_constructed_executor<multi_queue_executor>>(
+          [this, hw_mgr = _hardware_manager.get()]() {
+            return create_multi_queue_executor(this, hw_mgr);
+          });
 }
 
 api_platform ze_backend::get_api_platform() const {
@@ -90,7 +87,7 @@ backend_hardware_manager* ze_backend::get_hardware_manager() const {
 }
 
 backend_executor* ze_backend::get_executor(device_id dev) const {
-  return _executor.get();
+  return _executor->get();
 }
 
 backend_allocator *ze_backend::get_allocator(device_id dev) const {

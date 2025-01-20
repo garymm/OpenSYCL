@@ -1,33 +1,17 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2022 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_GLUE_JIT_HPP
 #define HIPSYCL_GLUE_JIT_HPP
 
+#include "hipSYCL/common/appdb.hpp"
 #include "hipSYCL/common/hcf_container.hpp"
 #include "hipSYCL/common/debug.hpp"
 #include "hipSYCL/common/small_map.hpp"
@@ -35,8 +19,9 @@
 #include "hipSYCL/compiler/llvm-to-backend/LLVMToBackend.hpp"
 #include "hipSYCL/runtime/error.hpp"
 #include "hipSYCL/runtime/kernel_cache.hpp"
-#include "hipSYCL/glue/kernel_configuration.hpp"
+#include "hipSYCL/runtime/kernel_configuration.hpp"
 #include "hipSYCL/runtime/application.hpp"
+#include "jit-reflection/reflection_map.hpp"
 #include <cstddef>
 #include <vector>
 #include <atomic>
@@ -54,21 +39,33 @@ namespace jit {
 // into their elements in the kernel function prototype.
 class cxx_argument_mapper {
 public:
+  cxx_argument_mapper() = default;
   cxx_argument_mapper(const rt::hcf_kernel_info &kernel_info, void **args,
                       const std::size_t *arg_sizes, std::size_t num_args) {
+    construct_mapping(kernel_info, args, arg_sizes, num_args);
+  }
+
+  void construct_mapping(const rt::hcf_kernel_info &kernel_info, void **args,
+                         const std::size_t *arg_sizes, std::size_t num_args) {
 
     std::size_t num_params = kernel_info.get_num_parameters();
-    
-    for(int i = 0; i < num_params; ++i) {
+
+    _mapped_data.clear();
+    _mapped_sizes.clear();
+    _mapped_data.reserve(num_params);
+    _mapped_sizes.reserve(num_params);
+
+    for (int i = 0; i < num_params; ++i) {
       std::size_t arg_size = kernel_info.get_argument_size(i);
       std::size_t arg_offset = kernel_info.get_argument_offset(i);
-      std::size_t arg_original_index = kernel_info.get_original_argument_index(i);
+      std::size_t arg_original_index =
+          kernel_info.get_original_argument_index(i);
 
       assert(arg_original_index < num_args);
 
       void *data_ptr = add_offset(args[arg_original_index], arg_offset);
-      
-      if(!data_ptr)
+
+      if (!data_ptr)
         return;
 
       _mapped_data.push_back(data_ptr);
@@ -86,6 +83,10 @@ public:
     return _mapped_data.data();
   }
 
+  void* const* get_mapped_args() const {
+    return _mapped_data.data();
+  }
+
   const std::size_t* get_mapped_arg_sizes() const {
     return _mapped_sizes.data();
   }
@@ -93,6 +94,24 @@ public:
   std::size_t get_mapped_num_args() const {
     return _mapped_data.size();
   }
+
+  void apply_dead_argument_elimination_mask(
+      const std::vector<int> &retained_argument_indices) {
+    assert(retained_argument_indices.size() <= _mapped_data.size());
+
+    for(int i = 0; i < retained_argument_indices.size(); ++i) {
+      assert(retained_argument_indices[i] < _mapped_data.size());
+      assert(retained_argument_indices[i] >= i);
+      _mapped_data[i] = _mapped_data[retained_argument_indices[i]];
+      _mapped_sizes[i] = _mapped_sizes[retained_argument_indices[i]];
+    }
+    _mapped_data.erase(_mapped_data.begin() + retained_argument_indices.size(),
+                       _mapped_data.end());
+    _mapped_sizes.erase(_mapped_sizes.begin() +
+                            retained_argument_indices.size(),
+                        _mapped_sizes.end());
+  }
+
 private:
   void *add_offset(void *ptr, std::size_t offset_bytes) const {
     return static_cast<void *>(static_cast<char *>(ptr) + offset_bytes);
@@ -121,7 +140,7 @@ std::string select_image(const rt::hcf_kernel_info* kernel_info,
                                           image_name);
 
   if (!selected_image_info)
-    return nullptr;
+    return {};
 
   if(all_kernels_in_image_out) {
     *all_kernels_in_image_out = selected_image_info->get_contained_kernels();
@@ -210,19 +229,69 @@ private:
 
 inline rt::result compile(compiler::LLVMToBackendTranslator *translator,
                           const std::string &source,
-                          const glue::kernel_configuration &config,
+                          const rt::kernel_configuration &config,
                           const symbol_list_t& imported_symbol_names,
+                          const reflection_map& refl_map,
                           std::string &output) {
 
   assert(translator);
-
   runtime_linker configure_linker {translator, imported_symbol_names};
 
   // Apply configuration
-  translator->setS2IRConstant<sycl::sscp::current_backend, int>(
-      translator->getBackendId());
-  for(const auto& entry : config.entries()) {
-    translator->setS2IRConstant(entry.get_name(), entry.get_data_buffer());
+  if(translator->getKernels().size() == 1) {
+    // Currently we only can specialize kernel arguments for the 
+    // single-kernel code object model
+    HIPSYCL_DEBUG_INFO << "jit: Configuring kernel "
+                       << translator->getKernels()[0] << std::endl;
+    for(const auto& entry : config.specialized_arguments()) {
+      HIPSYCL_DEBUG_INFO << "jit: Specializing argument " << entry.first
+                         << " = " << entry.second << std::endl;
+      translator->specializeKernelArgument(translator->getKernels().front(),
+                                          entry.first, &entry.second);
+    }
+
+    int num_param_indices = static_cast<int>(config.get_num_kernel_param_indices());
+    for (int i = 0; i < num_param_indices; ++i) {
+      if (config.has_kernel_param_flag(i, rt::kernel_param_flag::noalias)) {
+        HIPSYCL_DEBUG_INFO << "jit: Setting argument " << i << " to noalias"
+                           << std::endl;
+        translator->setNoAliasKernelParam(translator->getKernels().front(), i);
+      }
+    }
+    for(const auto& entry : config.known_alignments()) {
+      HIPSYCL_DEBUG_INFO << "jit: Setting argument " << entry.first
+                         << " to alignment " << entry.second << std::endl;
+      translator->setKnownPtrParamAlignment(translator->getKernels().front(),
+                                            entry.first, entry.second);
+    }
+  }
+  for(const auto& entry : config.function_call_specialization_config()) {
+    auto& config = entry.value->function_call_map;
+    for(const auto& call_specialization : config) {
+      HIPSYCL_DEBUG_INFO << "jit: Specializing function call to "
+                         << call_specialization.first << std::endl;
+      translator->specializeFunctionCalls(call_specialization.first,
+                                          call_specialization.second, false);
+    }
+  }
+
+  for(const auto& option : config.build_options()) {
+    std::string option_name = rt::to_string(option.first);
+    std::string option_value =
+        option.second.int_value.has_value()
+            ? std::to_string(option.second.int_value.value())
+            : option.second.string_value.value();
+    
+    translator->setBuildOption(option_name, option_value);
+  }
+
+  for(const auto& flag : config.build_flags()) {
+    translator->setBuildFlag(rt::to_string(flag));
+  }
+
+  // Set up JIT-time reflection for the code we compile
+  for(const auto& KV : refl_map) {
+    translator->setReflectionField(KV.first, KV.second);
   }
 
   // Transform code
@@ -248,7 +317,7 @@ inline rt::result compile(compiler::LLVMToBackendTranslator *translator,
       ++failure_index;
     }
     
-    return rt::make_error(__hipsycl_here(),
+    return rt::make_error(__acpp_here(),
                       rt::error_info{"jit::compile: Encountered errors:\n" +
                                  translator->getErrorLogAsString()});
   }
@@ -260,7 +329,8 @@ inline rt::result compile(compiler::LLVMToBackendTranslator *translator,
 inline rt::result compile(compiler::LLVMToBackendTranslator* translator,
                           const common::hcf_container* hcf,
                           const std::string& image_name,
-                          const glue::kernel_configuration &config,
+                          const rt::kernel_configuration &config,
+                          const reflection_map& refl_map,
                           std::string &output) {
   assert(hcf);
   assert(hcf->root_node());
@@ -269,14 +339,14 @@ inline rt::result compile(compiler::LLVMToBackendTranslator* translator,
   auto images_node = hcf->root_node()->get_subnode("images");
   if(!images_node) {
     return rt::make_error(
-        __hipsycl_here(),
+        __acpp_here(),
         rt::error_info{
             "jit::compile: Invalid HCF, no node named 'images' was found"});
   }
 
   auto target_image_node = images_node->get_subnode(image_name);
   if(!target_image_node) {
-    return rt::make_error(__hipsycl_here(),
+    return rt::make_error(__acpp_here(),
                           rt::error_info{"jit::compile: Requested image " +
                                          image_name +
                                          " was not defined in HCF"});
@@ -284,14 +354,14 @@ inline rt::result compile(compiler::LLVMToBackendTranslator* translator,
 
   if(!target_image_node->has_binary_data_attached()) {
     return rt::make_error(
-        __hipsycl_here(),
+        __acpp_here(),
         rt::error_info{"jit::compile: Image " + image_name +
                        " was defined in HCF without data"});
   }
   std::string source;
   if(!hcf->get_binary_attachment(target_image_node, source)) {
     return rt::make_error(
-        __hipsycl_here(),
+        __acpp_here(),
         rt::error_info{
             "jit::compile: Could not extract binary data for HCF image " +
             image_name});
@@ -300,23 +370,70 @@ inline rt::result compile(compiler::LLVMToBackendTranslator* translator,
   symbol_list_t imported_symbol_names =
       target_image_node->get_as_list("imported-symbols");
 
-  return compile(translator, source, config, imported_symbol_names, output);
+  return compile(translator, source, config, imported_symbol_names, refl_map,
+                 output);
 }
 
 inline rt::result compile(compiler::LLVMToBackendTranslator* translator,
                           rt::hcf_object_id hcf_object,
                           const std::string& image_name,
-                          const glue::kernel_configuration &config,
+                          const rt::kernel_configuration &config,
+                          const reflection_map& refl_map,
                           std::string &output) {
   const common::hcf_container* hcf = rt::hcf_cache::get().get_hcf(hcf_object);
   if(!hcf) {
     return rt::make_error(
-        __hipsycl_here(),
+        __acpp_here(),
         rt::error_info{"jit::compile: Could not obtain HCF object"});
   }
 
   return compile(translator, hcf, image_name, config,
-                 output);
+                 refl_map, output);
+}
+
+namespace dead_argument_elimination {
+// Compiles with dead-argument-elimination for the kernels, and saves
+// the retained argument mask in the appdb. This only works for single-kernel
+// compilations!
+inline rt::result compile_kernel(compiler::LLVMToBackendTranslator *translator,
+                                 rt::hcf_object_id hcf_object,
+                                 const std::string &image_name,
+                                 const rt::kernel_configuration &config,
+                                 rt::kernel_configuration::id_type binary_id,
+                                 const reflection_map &refl_map,
+                                 std::string &output) {
+
+  assert(translator->getKernels().size() == 1);
+
+  rt::result err = rt::make_success();
+
+  common::filesystem::persistent_storage::get()
+      .get_this_app_db()
+      .read_write_access([&](common::db::appdb_data &appdb) {
+        std::vector<int> *retained_args =
+            &(appdb.kernels[binary_id].retained_argument_indices);
+
+        translator->enableDeadArgumentElminiation(translator->getKernels()[0],
+                                                  retained_args);
+        err = compile(translator, hcf_object, image_name, config, refl_map,
+                      output);
+      });
+
+  return err;
+}
+
+inline std::vector<int>
+retrieve_retained_arguments_mask(rt::kernel_configuration::id_type binary_id) {
+  return common::filesystem::persistent_storage::get().get_this_app_db().read_access(
+      [&](const common::db::appdb_data &appdb) {
+        auto it = appdb.kernels.find(binary_id);
+        if(it != appdb.kernels.end()) {
+          return it->second.retained_argument_indices;
+        } else {
+          return std::vector<int>{};
+        }
+      });
+}
 }
 
 }

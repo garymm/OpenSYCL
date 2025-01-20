@@ -1,60 +1,81 @@
-cmake_minimum_required (VERSION 3.5)
-if(NOT CMAKE_VERSION VERSION_LESS 3.12)
+cmake_minimum_required(VERSION 3.10)
+
+if(POLICY CMP0074) # Since CMake 3.12
   cmake_policy(SET CMP0074 NEW) # Don't complain about using BOOST_ROOT...
+endif()
+if(POLICY CMP0167) # Since CMake 3.30
+    # Suppress warning: "Policy CMP0167 is not set: The FindBoost module is removed."
+    # Set CMP0167 to OLD to avoid breakage in the Windows & macOS CI tests.
+    cmake_policy(SET CMP0167 OLD)
 endif()
 
 
-set(ACPP_VERSION_MAJOR 23)
+set(ACPP_VERSION_MAJOR 24)
 set(ACPP_VERSION_MINOR 10)
 set(ACPP_VERSION_PATCH 0)
+
+execute_process(
+        COMMAND git status
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        RESULT_VARIABLE GIT_STATUS
+)
+
 if(NOT ACPP_VERSION_SUFFIX)
-  # Get the latest abbreviated commit hash of the working branch
-  execute_process(
-    COMMAND git log -1 --format=%h
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE ACPP_GIT_COMMIT_HASH
-    RESULT_VARIABLE GIT_HASH_RETURN_CODE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-  # git branch
-  execute_process(
-    COMMAND git rev-parse --abbrev-ref HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE ACPP_GIT_BRANCH
-    RESULT_VARIABLE GIT_BRANCH_RETURN_CODE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-  # date of commit
-  execute_process(COMMAND git show -s --format=%cd --date=format:%Y%m%d HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE ACPP_GIT_DATE
-    RESULT_VARIABLE GIT_DATE_RETURN_CODE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-  # check whether there are local changes
-  execute_process(COMMAND git diff-index --name-only HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE ACPP_LOCAL_CHANGES
-    RESULT_VARIABLE GIT_LOCAL_CHANGES_RETURN_CODE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-  
-  if (GIT_HASH_RETURN_CODE EQUAL 0 AND GIT_BRANCH_RETURN_CODE EQUAL 0 AND 
-      GIT_DATE_RETURN_CODE EQUAL 0 AND GIT_LOCAL_CHANGES_RETURN_CODE EQUAL 0)
-    
-    if(NOT "${ACPP_LOCAL_CHANGES}" STREQUAL "")
-      set(DIRTY_STR ".dirty")
-    else()
-      set(DIRTY_STR "")
+  # With a release tarball, "git status" will fail (return non zero)
+  if(GIT_STATUS)
+    set(ACPP_VERSION_SUFFIX "")
+  else()
+    # Get the latest abbreviated commit hash of the working branch
+    execute_process(
+      COMMAND git log -1 --format=%h
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      OUTPUT_VARIABLE ACPP_GIT_COMMIT_HASH
+      RESULT_VARIABLE GIT_HASH_RETURN_CODE
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    # git branch
+    execute_process(
+      COMMAND git rev-parse --abbrev-ref HEAD
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      OUTPUT_VARIABLE ACPP_GIT_BRANCH
+      RESULT_VARIABLE GIT_BRANCH_RETURN_CODE
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    # date of commit
+    execute_process(COMMAND git show -s --format=%cd --date=short HEAD
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      OUTPUT_VARIABLE ACPP_GIT_DATE
+      RESULT_VARIABLE GIT_DATE_RETURN_CODE
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    # Convert YYYY-MM-DD to YYYYMMDD
+    # We can't use --date=format:%Y%m%d to be compatible with git pre-2.6
+    string(REPLACE "-" "" ACPP_GIT_DATE ${ACPP_GIT_DATE})
+    # check whether there are local changes
+    execute_process(COMMAND git diff-index --name-only HEAD
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      OUTPUT_VARIABLE ACPP_LOCAL_CHANGES
+      RESULT_VARIABLE GIT_LOCAL_CHANGES_RETURN_CODE
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    if (GIT_HASH_RETURN_CODE EQUAL 0 AND GIT_BRANCH_RETURN_CODE EQUAL 0 AND
+        GIT_DATE_RETURN_CODE EQUAL 0 AND GIT_LOCAL_CHANGES_RETURN_CODE EQUAL 0)
+
+      if(NOT "${ACPP_LOCAL_CHANGES}" STREQUAL "")
+        set(DIRTY_STR ".dirty")
+      else()
+        set(DIRTY_STR "")
+      endif()
+
+      set(ACPP_VERSION_SUFFIX "+git.${ACPP_GIT_COMMIT_HASH}.${ACPP_GIT_DATE}.branch.${ACPP_GIT_BRANCH}${DIRTY_STR}")
     endif()
-  
-    set(ACPP_VERSION_SUFFIX "+git.${ACPP_GIT_COMMIT_HASH}.${ACPP_GIT_DATE}.branch.${ACPP_GIT_BRANCH}${DIRTY_STR}")
   endif()
 endif()
 
 project(hipSYCL VERSION ${ACPP_VERSION_MAJOR}.${ACPP_VERSION_MINOR}.${ACPP_VERSION_PATCH})
 
-set(HIPSYCL_DEVICE_COMPILER ${PROJECT_SOURCE_DIR}/bin/syclcc-clang)
+
 set(HIPSYCL_SOURCE_DIR ${PROJECT_SOURCE_DIR})
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -87,13 +108,85 @@ endif()
 list(INSERT CMAKE_MODULE_PATH 0 "${PROJECT_SOURCE_DIR}/cmake/")
 find_package(CUDA QUIET)
 find_package(HIP QUIET HINTS ${ROCM_PATH} ${ROCM_PATH}/lib/cmake)
-# Check for OpenCL
-find_package(OpenCL QUIET)
+
+#set(WITH_CUDA_NVCXX_ONLY FALSE CACHE BOOL "(Deprecated) Whether to target CUDA exclusively with nvc++")
+
+if(APPLE OR WIN32)
+  set(DEFAULT_COMPILER_FEATURES_ENABLED false)
+  set(ACPP_COMPILER_FEATURE_PROFILE "none" CACHE STRING "The level of AdaptiveCpp compiler features to enable. If not set to 'full', AdaptiveCpp will run in a degraded mode that may have implications for certain functionalities or performance in certain cases.")
+else()
+  set(DEFAULT_COMPILER_FEATURES_ENABLED true)
+  set(ACPP_COMPILER_FEATURE_PROFILE "full" CACHE STRING "The level of AdaptiveCpp compiler features to enable. If not set to 'full', AdaptiveCpp will run in a degraded mode that may have implications for certain functionalities or performance in certain cases.")
+endif()
+set_property(CACHE ACPP_COMPILER_FEATURE_PROFILE PROPERTY STRINGS full  minimal none)
+
+
+if (DEFINED WITH_SSCP_COMPILER OR DEFINED WITH_STDPAR_COMPILER OR DEFINED WITH_ACCELERATED_CPU OR DEFINED WITH_CUDA_NVCXX_ONLY)
+  message(DEPRECATION "WITH_SSCP_COMPILER, WITH_STDPAR_COMPILER, WITH_ACCELERATED_CPU and WITH_CUDA_NVCXX_ONLY are deprecated and will be removed in a future version; please use ACPP_COMPILER_FEATURE_PROFILE instead.")
+  set(ACPP_COMPILER_FEATURE_PROFILE "custom-deprecated")
+endif()
+
+
+set(ACPP_CUSTOM_PROFILE_WITH_SSCP_COMPILER ${DEFAULT_COMPILER_FEATURES_ENABLED} CACHE INTERNAL "(deprecated) custom profile")
+set(ACPP_CUSTOM_PROFILE_WITH_STDPAR_COMPILER ${DEFAULT_COMPILER_FEATURES_ENABLED} CACHE INTERNAL "(deprecated) custom profile")
+set(ACPP_CUSTOM_PROFILE_WITH_ACCELERATED_CPU ${DEFAULT_COMPILER_FEATURES_ENABLED} CACHE INTERNAL "(deprecated) custom profile")
+
+if(ACPP_COMPILER_FEATURE_PROFILE STREQUAL "full")
+  set(WITH_SSCP_COMPILER true)
+  set(WITH_STDPAR_COMPILER true)
+  set(WITH_ACCELERATED_CPU true)
+elseif(ACPP_COMPILER_FEATURE_PROFILE STREQUAL "minimal")
+  set(WITH_SSCP_COMPILER false)
+  set(WITH_STDPAR_COMPILER false)
+  set(WITH_ACCELERATED_CPU false)
+elseif(ACPP_COMPILER_FEATURE_PROFILE STREQUAL "none")
+  # CUDA_NVCXX is handled further down.
+  set(WITH_SSCP_COMPILER false)
+  set(WITH_STDPAR_COMPILER false)
+  set(WITH_ACCELERATED_CPU false)
+elseif(ACPP_COMPILER_FEATURE_PROFILE STREQUAL "custom-deprecated")
+  if(DEFINED WITH_SSCP_COMPILER)
+    set(ACPP_CUSTOM_PROFILE_WITH_SSCP_COMPILER ${WITH_SSCP_COMPILER} CACHE INTERNAL "(deprecated) custom profile")
+  endif()
+  if(DEFINED WITH_STDPAR_COMPILER)
+    set(ACPP_CUSTOM_PROFILE_WITH_STDPAR_COMPILER ${WITH_STDPAR_COMPILER} CACHE INTERNAL "(deprecated) custom profile")
+  endif()
+  if(DEFINED WITH_ACCELERATED_CPU)
+    set(ACPP_CUSTOM_PROFILE_WITH_ACCELERATED_CPU ${WITH_ACCELERATED_CPU} CACHE INTERNAL "(deprecated) custom profile")
+  endif()
+
+  # Ensure that these argument do not enter cache, otherwise the if(defined) checks above
+  # will no longer work.
+  unset(WITH_SSCP_COMPILER CACHE)
+  unset(WITH_STDPAR_COMPILER CACHE)
+  unset(WITH_ACCELERATED_CPU CACHE)
+
+  set(WITH_SSCP_COMPILER ${ACPP_CUSTOM_PROFILE_WITH_SSCP_COMPILER})
+  set(WITH_STDPAR_COMPILER ${ACPP_CUSTOM_PROFILE_WITH_STDPAR_COMPILER})
+  set(WITH_ACCELERATED_CPU ${ACPP_CUSTOM_PROFILE_WITH_ACCELERATED_CPU})
+
+
+  message(DEPRECATION "Configuring DEPRECATED custom compiler feature profile with SSCP=${WITH_SSCP_COMPILER}, stdpar=${WITH_STDPAR_COMPILER}, accelerated cpu=${WITH_ACCELERATED_CPU}")
+else()
+  message(SEND_ERROR "Invalid value for ACPP_COMPILER_FEATURE_PROFILE: '${ACPP_COMPILER_FEATURE_PROFILE}'. Allowed values are: full, minimal, none")
+endif()
+
+
+message(STATUS "Building with compiler feature profile: ${ACPP_COMPILER_FEATURE_PROFILE}")
+
+# Check for OpenCL unless user has explicitly set WITH_SSCP_COMPILER to False
+if (DEFINED WITH_SSCP_COMPILER)
+  if (WITH_SSCP_COMPILER)
+    find_package(OpenCL QUIET)
+  endif()
+else()
+  find_package(OpenCL QUIET)
+endif()
 
 # In case HIP is not found via the cmake pkgs we fall back to the legacy rocm discovery:
 if (NOT HIP_FOUND)
   message(STATUS "Could not find HIP cmake integration, falling back to finding hipcc")
-  find_program(HIPCC_COMPILER NAMES hipcc HINTS ${ROCM_PATH})
+  find_program(HIPCC_COMPILER NAMES hipcc HINTS ${ROCM_PATH} ${ROCM_PATH}/bin)
   set(ROCM_PATH /opt/rocm CACHE PATH "Path to ROCm installation")
   if(HIPCC_COMPILER MATCHES "-NOTFOUND")
     message(STATUS "Could not find ROCm installation by looking for hipcc. ROCm support unavailable.")
@@ -113,7 +206,7 @@ endif()
 if(WITH_ROCM_BACKEND)
   if(NOT ROCM_FOUND)
     #  message(SEND_ERROR "hipcc was not found")
-  
+
     # User has requested ROCm, but we could not find hipcc.
     # this is not necessarily a reason to abort,
     # since we only need libhip_hcc, the HIP includes,
@@ -130,30 +223,14 @@ if(WITH_OPENCL_BACKEND)
   endif()
 endif()
 
-set(WITH_CUDA_BACKEND ${CUDA_FOUND} CACHE BOOL "Build hipSYCL support for NVIDIA GPUs with CUDA")
-set(WITH_ROCM_BACKEND ${ROCM_FOUND} CACHE BOOL "Build hipSYCL support for AMD GPUs with ROCm")
-set(WITH_OPENCL_BACKEND ${OpenCL_FOUND} CACHE BOOL "Build hipSYCL support for OpenCL SPIR-V devices supporting USM")
-set(WITH_CUDA_NVCXX_ONLY FALSE CACHE BOOL "Whether to target CUDA exclusively with nvc++")
+set(WITH_CUDA_BACKEND ${CUDA_FOUND} CACHE BOOL "Build AdaptiveCpp support for NVIDIA GPUs with CUDA")
+set(WITH_ROCM_BACKEND ${ROCM_FOUND} CACHE BOOL "Build AdaptiveCpp support for AMD GPUs with ROCm")
+set(WITH_OPENCL_BACKEND ${OpenCL_FOUND} CACHE BOOL "Build AdaptiveCpp support for OpenCL SPIR-V devices supporting USM")
 
-if(APPLE OR WIN32 OR WITH_CUDA_NVCXX_ONLY)
-  set(WITH_ACCELERATED_CPU false CACHE BOOL "Build hipSYCL compiler support for accelerating the CPU backend")
-  set(WITH_SSCP_COMPILER false CACHE BOOL "Build hipSYCL generic SSCP compiler support")
-  set(WITH_STDPAR_COMPILER false CACHE BOOL "Build hipSYCL C++ standard parallelism support")
-else()
-  set(WITH_ACCELERATED_CPU true CACHE BOOL "Build hipSYCL compiler support for accelerating the CPU backend")
-  set(WITH_SSCP_COMPILER true CACHE BOOL "Build hipSYCL generic SSCP compiler support")
-  set(WITH_STDPAR_COMPILER true CACHE BOOL "Build hipSYCL C++ standard parallelism compiler support")
-endif()
 set(WITH_CPU_BACKEND true)
 
 if(WITH_CUDA_BACKEND)
-  set(DEFAULT_PLATFORM "cuda")
-
   find_program(NVCXX_COMPILER NAMES nvc++)
-elseif(WITH_ROCM_BACKEND)
-  set(DEFAULT_PLATFORM "rocm")
-else()
-  set(DEFAULT_PLATFORM "cpu")
 endif()
 
 if(WITH_CUDA_NVCXX_ONLY)
@@ -184,20 +261,28 @@ else()
   set(WITH_STDPAR_COMPILER false)
 endif()
 
-if(WITH_CUDA_BACKEND AND NOT WITH_CUDA_NVCXX_ONLY)
-  set(BUILD_CLANG_PLUGIN true)
+if(WITH_CUDA_BACKEND)
+  if(NOT WITH_CUDA_NVCXX_ONLY AND NOT ACPP_COMPILER_FEATURE_PROFILE STREQUAL "none")
+    set(BUILD_CLANG_PLUGIN true)
+  endif()
 endif()
 if(WITH_ROCM_BACKEND)
   set(BUILD_CLANG_PLUGIN true)
 endif()
 if(WITH_OPENCL_BACKEND OR WITH_LEVEL_ZERO_BACKEND)
-  set(BUILD_CLANG_PLUGIN true)
-  set(WITH_SSCP_COMPILER true)
+  if(NOT ACPP_COMPILER_FEATURE_PROFILE STREQUAL "none" AND NOT ACPP_COMPILER_FEATURE_PROFILE STREQUAL "minimal")
+    set(BUILD_CLANG_PLUGIN true)
+    set(WITH_SSCP_COMPILER true)
+  endif()
 endif()
 
 if(BUILD_CLANG_PLUGIN)
+  set(LLVM_DIR_OLD ${LLVM_DIR})
   find_package(LLVM CONFIG)
-  message(STATUS "Building hipSYCL against LLVM configured from ${LLVM_DIR}")
+  if(LLVM_DIR_OLD AND NOT ("${LLVM_DIR_OLD}" STREQUAL "${LLVM_DIR}"))
+    message(WARNING "Could not find LLVM in the requested location LLVM_DIR=${LLVM_DIR_OLD}; using ${LLVM_DIR}.")
+  endif()
+  message(STATUS "Building AdaptiveCpp against LLVM configured from ${LLVM_DIR}")
   #find_package(Clang REQUIRED)
 
   find_program(CLANG_EXECUTABLE_PATH NAMES clang++-${LLVM_VERSION_MAJOR} clang++-${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR} clang++ HINTS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH CACHE STRING)
@@ -219,7 +304,7 @@ if(BUILD_CLANG_PLUGIN)
   get_filename_component(LLVM_BIN_DIR "${CLANG_EXECUTABLE_PATH}" DIRECTORY)
   get_filename_component(LLVM_PREFIX_DIR "${LLVM_BIN_DIR}" DIRECTORY)
   # The path to the internal clang includes is currently required on ROCm
-  # to let syclcc-clang fix a wrong order of system includes (clang's internal 
+  # to let acpp fix a wrong order of system includes (clang's internal
   # includes are not of high enough priority in the include path search order).
   # We identify this path as the one containing __clang_cuda_runtime_wrapper.h,
   # which is a clang-specific header file.
@@ -239,9 +324,9 @@ if(BUILD_CLANG_PLUGIN)
     # Required for newer ROCm versions
     set(CLANG_INCLUDE_PATH ${FOUND_CLANG_INCLUDE_PATH}/..)
   endif()
-  
+
   if(NOT EXISTS ${CLANG_INCLUDE_PATH})
-    message(SEND_ERROR "clang include path ${CLANG_INCLUDE_PATH} does not exist. Please provide clang's internal include path manually: Find the directory where __clang_cuda_runtime_wrapper.h is. Provide this directory for older ROCm versions and the parent directory for newer ones.")
+    message(SEND_ERROR "CLANG_INCLUDE_PATH ${CLANG_INCLUDE_PATH} does not exist. Please provide clang's internal include path manually: Find the directory where __clang_cuda_runtime_wrapper.h is. Provide this directory for older ROCm versions and the parent directory for newer ones.")
   endif()
   if(WITH_ROCM_BACKEND)
     execute_process(COMMAND ${CLANG_EXECUTABLE_PATH} "--version"
@@ -253,49 +338,43 @@ if(BUILD_CLANG_PLUGIN)
       set(ROCM_VERSION_MINOR ${CMAKE_MATCH_2})
       set(ROCM_VERSION_PATCH ${CMAKE_MATCH_3})
       message(STATUS "AMD clang version: ${ROCM_VERSION_MAJOR}.${ROCM_VERSION_MINOR}.${ROCM_VERSION_PATCH}")
-
-      if(${LLVM_VERSION_MAJOR} EQUAL 13 AND NOT DEFINED HIPSYCL_NO_DEVICE_MANGLER)
-        message(SEND_ERROR "AMD clang version not compatible with hipSYCL explicit multipass. "
-                           "To disable explicit multipass set -DHIPSYCL_NO_DEVICE_MANGLER=ON. "
-                           "This also disables simultaneous compilation for CUDA and HIP devices.")
-      endif()
     endif()
   endif()
-  if(${LLVM_VERSION_MAJOR} LESS 11 AND ${WITH_ACCELERATED_CPU})
-    message(WARNING "clang version too old (${LLVM_VERSION_MAJOR} < 11) to be used with CPU acceleration support, disabling WITH_ACCELERATED_CPU")
-    set(WITH_ACCELERATED_CPU false)
-  endif()
-  if(${LLVM_VERSION_MAJOR} LESS 14 AND ${WITH_SSCP_COMPILER})
-    message(WARNING "clang version too old (${LLVM_VERSION_MAJOR} < 14) to be used with SSCP compiler, disabling WITH_SSCP_COMPILER")
-    set(WITH_SSCP_COMPILER false)
-  endif()
-  if(${LLVM_VERSION_MAJOR} LESS 14 AND ${WITH_STDPAR_COMPILER})
-    message(WARNING "clang version too old (${LLVM_VERSION_MAJOR} < 14) to be used with C++ standard parallelism support, disabling WITH_STDPAR_COMPILER")
-    set(WITH_STDPAR_COMPILER false)
+
+  if(${LLVM_VERSION_MAJOR} LESS 14)
+    if(${WITH_ACCELERATED_CPU} OR ${WITH_SSCP_COMPILER} OR ${WITH_STDPAR_COMPILER})
+      message(WARNING "clang version too old (${LLVM_VERSION_MAJOR} < 14) to be used with advanced AdaptiveCpp compiler features, disabling WITH_STDPAR_COMPILER, WITH_ACCELERATED_CPU, WITH_SSCP_COMPILER")
+      set(WITH_REFLECTION_BUILTINS OFF)
+      set(WITH_STDPAR_COMPILER false)
+      set(WITH_SSCP_COMPILER false)
+      set(WITH_ACCELERATED_CPU false)
+    endif()
   endif()
   message(STATUS "Using clang include directory: ${CLANG_INCLUDE_PATH}")
+
+# Check if building on Windows and LLVM_LIBS is set, if not, use LLVM_AVAILABLE_LIBS
+  if(WIN32 AND NOT LLVM_LIBS AND LLVM_AVAILABLE_LIBS)
+    llvm_map_components_to_libnames(LLVM_LIBS analysis core support passes)
+  endif()
 endif()
 
 #add_compile_definitions(HIPSYCL_DEBUG_LEVEL="${HIPSYCL_DEBUG_LEVEL}")
 #Use add_definitions for now for older cmake versions
 cmake_policy(SET CMP0005 NEW)
 add_definitions(-DHIPSYCL_DEBUG_LEVEL=${HIPSYCL_DEBUG_LEVEL})
-option(HIPSYCL_NO_DEVICE_MANGLER "Disable the use of DeviceMangler. necessary for LLVM 13 distributed with the rocm packages." OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_subdirectory(src)
+set(ACPP_CONFIG_FILE_PATH "${PROJECT_BINARY_DIR}")
+set(ACPP_CONFIG_FILE_GLOBAL_INSTALLATION false CACHE BOOL
+  "Whether to install the AdaptiveCpp configuration files into a global directory (typically, /etc/AdaptiveCpp). This is generally not recommended.")
 
-set(SYCLCC_CONFIG_FILE_PATH "${PROJECT_BINARY_DIR}/syclcc.json")
-set(SYCLCC_CONFIG_FILE_GLOBAL_INSTALLATION false CACHE BOOL 
-  "Whether to install the syclcc configuration file into a global directory (typically, /etc/hipSYCL). This is generally not recommended.")
-
-if(SYCLCC_CONFIG_FILE_GLOBAL_INSTALLATION)
-  set(SYCLCC_CONFIG_FILE_INSTALL_DIR /etc/hipSYCL/)
+if(ACPP_CONFIG_FILE_GLOBAL_INSTALLATION)
+  set(ACPP_CONFIG_FILE_INSTALL_DIR /etc/AdaptiveCpp/)
 else()
-  set(SYCLCC_CONFIG_FILE_INSTALL_DIR etc/hipSYCL)
+  set(ACPP_CONFIG_FILE_INSTALL_DIR etc/AdaptiveCpp)
 endif()
 
 if(Boost_FIBER_LIBRARY_DEBUG)
@@ -313,7 +392,7 @@ endif()
 
 if(APPLE)
   set(DEFAULT_OMP_FLAG "-Xclang -fopenmp")
-  
+
   if(Boost_FIBER_LIBRARY_DEBUG)
     set(DEFAULT_BOOST_LIBRARIES "${Boost_CONTEXT_LIBRARY_DEBUG} ${Boost_FIBER_LIBRARY_DEBUG} -Wl,-rpath ${Boost_LIBRARY_DIR}")
   else()
@@ -323,11 +402,20 @@ else()
   set(DEFAULT_OMP_FLAG "-fopenmp")
 endif()
 
-set(DEFAULT_GPU_ARCH "" CACHE STRING "Optional: Default GPU architecture to compile for when targeting GPUs (e.g.: sm_60 or gfx900)")
+
 set(ROCM_LIBS "-L${ROCM_PATH}/lib -L${ROCM_PATH}/hip/lib -lamdhip64" CACHE STRING "Necessary libraries for ROCm")
+set(ACPP_FILESYSTEM_SEARCH_OPTIONS "Final;Experimental;Boost" CACHE STRING "Which filesystem libraries should be searched for")
+
+##########################################################
+## Do not define any variables that might be used by build
+## targets below this line.
+##########################################################
+add_subdirectory(src)
 
 set(DEFAULT_WIN32_CUDA_LINK_LINE "-L$HIPSYCL_CUDA_LIB_PATH -lcudart")
 set(DEFAULT_CUDA_LINK_LINE "-Wl,-rpath=$HIPSYCL_CUDA_LIB_PATH -L$HIPSYCL_CUDA_LIB_PATH -lcudart")
+
+set(DEFAULT_WIN32_HIP_LINK_LINE "-L$HIPSYCL_ROCM_PATH/lib -lamdhip64")
 
 if(MINGW)
   set(DEFAULT_LINK_PREFIX "-l:")
@@ -352,8 +440,14 @@ set(DEFAULT_OMP_LINK_LINE "-L${Boost_LIBRARY_DIR} -lboost_context -lboost_fiber 
 set(DEFAULT_SEQUENTIAL_LINK_LINE "-L${Boost_LIBRARY_DIR} -lboost_context -lboost_fiber -Wl,-rpath=${Boost_LIBRARY_DIR}")
 
 # If no link lines given, set to default.
-if(NOT ROCM_LINK_LINE)
-  set(ROCM_LINK_LINE "-Wl,-rpath=$HIPSYCL_ROCM_PATH/lib -Wl,-rpath=$HIPSYCL_ROCM_PATH/hip/lib ${ROCM_LIBS}" CACHE STRING "Arguments passed to compiler to link ROCm libraries to SYCL applications")
+if(WIN32)
+  if(NOT ROCM_LINK_LINE)
+    set(ROCM_LINK_LINE ${DEFAULT_WIN32_HIP_LINK_LINE} CACHE STRING "Arguments passed to compiler to link ROCm libraries to SYCL applications")
+  endif()
+else()
+  if(NOT ROCM_LINK_LINE)
+    set(ROCM_LINK_LINE "-Wl,-rpath=$HIPSYCL_ROCM_PATH/lib -Wl,-rpath=$HIPSYCL_ROCM_PATH/hip/lib ${ROCM_LIBS}" CACHE STRING "Arguments passed to compiler to link ROCm libraries to SYCL applications")
+  endif()
 endif()
 
 if(WIN32)
@@ -363,7 +457,7 @@ if(WIN32)
   if(NOT OMP_LINK_LINE)
     set(OMP_LINK_LINE ${DEFAULT_WIN32_OMP_LINK_LINE} CACHE STRING "Arguments passed to compiler to link OpenMP libraries to SYCL applications")
   endif()
-  if(NOT SEQUENTIAL_LINK_LINE) 
+  if(NOT SEQUENTIAL_LINK_LINE)
     set(SEQUENTIAL_LINK_LINE ${DEFAULT_WIN32_SEQUENTIAL_LINK_LINE} CACHE STRING "Arguments passed to compiler to link host libraries to SYCL applications")
   endif()
 elseif(APPLE)
@@ -373,7 +467,7 @@ elseif(APPLE)
   if(NOT OMP_LINK_LINE)
     set(OMP_LINK_LINE ${DEFAULT_APPLE_OMP_LINK_LINE} CACHE STRING "Arguments passed to compiler to link OpenMP libraries to SYCL applications")
   endif()
-  if(NOT SEQUENTIAL_LINK_LINE) 
+  if(NOT SEQUENTIAL_LINK_LINE)
     set(SEQUENTIAL_LINK_LINE ${DEFAULT_APPLE_SEQUENTIAL_LINK_LINE} CACHE STRING "Arguments passed to compiler to link host libraries to SYCL applications")
   endif()
 else()
@@ -383,33 +477,33 @@ else()
   if(NOT OMP_LINK_LINE)
     set(OMP_LINK_LINE ${DEFAULT_OMP_LINK_LINE} CACHE STRING "Arguments passed to compiler to link OpenMP libraries to SYCL applications")
   endif()
-  if(NOT SEQUENTIAL_LINK_LINE) 
+  if(NOT SEQUENTIAL_LINK_LINE)
     set(SEQUENTIAL_LINK_LINE ${DEFAULT_SEQUENTIAL_LINK_LINE} CACHE STRING "Arguments passed to compiler to link host libraries to SYCL applications")
   endif()
 endif()
 
 # If no compile flags given, set to default.
 if(NOT ROCM_CXX_FLAGS)
-  # clang erroneously sets feature detection flags for 
+  # clang erroneously sets feature detection flags for
   # __float128 even though it is not supported for CUDA / HIP,
   # see https://bugs.llvm.org/show_bug.cgi?id=47559.
 
   set(ROCM_CXX_FLAGS "-isystem $HIPSYCL_PATH/include/AdaptiveCpp/hipSYCL/std/hiplike -isystem ${CLANG_INCLUDE_PATH} -U__FLOAT128__ -U__SIZEOF_FLOAT128__ -I$HIPSYCL_ROCM_PATH/include -I$HIPSYCL_ROCM_PATH/include --rocm-device-lib-path=$HIPSYCL_ROCM_PATH/amdgcn/bitcode --rocm-path=$HIPSYCL_ROCM_PATH -fhip-new-launch-api -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false -D__HIP_ROCclr__" CACHE STRING "Arguments passed to compiler to compile SYCL applications with ROCm")
 endif()
 
-if(NOT CUDA_CXX_FLAGS)	
-  # clang erroneously sets feature detection flags for 
+if(NOT CUDA_CXX_FLAGS)
+  # clang erroneously sets feature detection flags for
   # __float128 even though it is not supported for CUDA / HIP,
   # see https://bugs.llvm.org/show_bug.cgi?id=47559.
   set(CUDA_CXX_FLAGS "-U__FLOAT128__ -U__SIZEOF_FLOAT128__ -isystem $HIPSYCL_PATH/include/AdaptiveCpp/hipSYCL/std/hiplike" CACHE STRING "Arguments passed to compiler to compile SYCL applications with CUDA")
 endif()
 
 # always need -D_ENABLE_EXTENDED_ALIGNED_STORAGE to allow correctly aligned local memory on CPU
-if(NOT OMP_CXX_FLAGS) 
+if(NOT OMP_CXX_FLAGS)
   set(OMP_CXX_FLAGS "-I${Boost_INCLUDE_DIR} ${DEFAULT_OMP_FLAG} -D_ENABLE_EXTENDED_ALIGNED_STORAGE" CACHE STRING "Arguments passed to compiler to compile SYCL applications with OpenMP")
 endif()
 
-if(NOT SEQUENTIAL_CXX_FLAGS) 
+if(NOT SEQUENTIAL_CXX_FLAGS)
   set(SEQUENTIAL_CXX_FLAGS "-I${Boost_INCLUDE_DIR} -D_ENABLE_EXTENDED_ALIGNED_STORAGE" CACHE STRING "Arguments passed to compiler to compile SYCL applications on host")
 endif()
 
@@ -419,7 +513,50 @@ else()
   set(PLUGIN_LLVM_VERSION_MAJOR 0)
 endif()
 
-set(SYCLCC_CONFIG_FILE "{
+set(DEFAULT_GPU_ARCH "" CACHE STRING "(Deprecated, use DEFAULT_TARGETS instead) Optional: Default GPU architecture to compile for when targeting GPUs (e.g.: sm_60 or gfx900)")
+set(DEFAULT_TARGETS "" CACHE STRING "Default targets to compile for")
+
+if(NOT DEFAULT_TARGETS)
+  if(DEFAULT_PLATFORM)
+    message(DEPRECATION "DEFAULT_PLATFORM is deprecated; use DEFAULT_TARGETS instead.")
+
+    if(DEFAULT_PLATFORM STREQUAL "cpu")
+      set(DEFAULT_TARGETS "omp")
+    endif()
+
+    if(DEFAULT_GPU_ARCH)
+      message(DEPRECATION "DEFAULT_GPU_ARCH is deprecated; use DEFAULT_TARGETS instead.")
+
+      if(DEFAULT_PLATFORM STREQUAL "cuda")
+        set(DEFAULT_TARGETS "cuda:${DEFAULT_GPU_ARCH}")
+      elseif(DEFAULT_PLATFORM STREQUAL "rocm")
+        set(DEFAULT_TARGETS "hip:${DEFAULT_GPU_ARCH}")
+      else()
+        message(SEND_ERROR "Invalid value for DEFAULT_PLATFORM: \"${DEFAULT_PLATFORM}\". When DEFAULT_GPU_ARCH is specified, only \"cuda\" and \"rocm\" are supported.")
+      endif()
+
+    endif()
+  elseif(DEFAULT_GPU_ARCH)
+    message(DEPRECATION "DEFAULT_GPU_ARCH is deprecated; use DEFAULT_TARGETS instead.")
+    message(SEND_ERROR "DEFAULT_GPU_ARCH cannot be used without specifying DEFAULT_PLATFORM.")
+  endif()
+endif()
+
+if(NOT DEFAULT_TARGETS)
+  if(WITH_SSCP_COMPILER)
+    set(DEFAULT_TARGETS "generic")
+  else()
+    message(WARNING "The generic SSCP compiler is disabled; without it, offloading code to accelerators requires explicitly specifying --acpp-targets when invoking acpp."
+" A binary generated by invoking acpp without --acpp-targets will only be able to run on the host. Set -DDEFAULT_TARGETS to your desired default targets during cmake "
+" configuration to avoid this warning. In the future, configurations without the SSCP compiler enabled might potentially be only supported if -DDEFAULT_TARGETS is provided explicitly.")
+    set(DEFAULT_TARGETS "omp")
+  endif()
+endif()
+
+message(STATUS "Default compilation target(s): ${DEFAULT_TARGETS}")
+
+
+set(ACPP_CORE_CONFIG_FILE "{
   \"version-major\" : \"${ACPP_VERSION_MAJOR}\",
   \"version-minor\" : \"${ACPP_VERSION_MINOR}\",
   \"version-patch\" : \"${ACPP_VERSION_PATCH}\",
@@ -427,10 +564,7 @@ set(SYCLCC_CONFIG_FILE "{
   \"plugin-llvm-version-major\" : \"${PLUGIN_LLVM_VERSION_MAJOR}\",
   \"plugin-with-cpu-acceleration\" : \"${WITH_ACCELERATED_CPU}\",
   \"default-clang\"     : \"${CLANG_EXECUTABLE_PATH}\",
-  \"default-nvcxx\"     : \"${NVCXX_COMPILER}\",
-  \"default-platform\"  : \"${DEFAULT_PLATFORM}\",
-  \"default-cuda-path\" : \"${CUDA_TOOLKIT_ROOT_DIR}\",
-  \"default-gpu-arch\"  : \"${DEFAULT_GPU_ARCH}\",
+  \"default-targets\"  : \"${DEFAULT_TARGETS}\",
   \"default-cpu-cxx\"   : \"${CMAKE_CXX_COMPILER}\",
   \"default-rocm-path\" : \"${ROCM_PATH}\",
   \"default-use-bootstrap-mode\" : \"false\",
@@ -441,17 +575,35 @@ set(SYCLCC_CONFIG_FILE "{
   \"default-sequential-cxx-flags\" : \"${SEQUENTIAL_CXX_FLAGS}\",
   \"default-omp-link-line\" : \"${OMP_LINK_LINE}\",
   \"default-omp-cxx-flags\" : \"${OMP_CXX_FLAGS}\",
-  \"default-rocm-link-line\" : \"${ROCM_LINK_LINE}\",
-  \"default-rocm-cxx-flags\" : \"${ROCM_CXX_FLAGS}\",
-  \"default-cuda-link-line\" : \"${CUDA_LINK_LINE}\",
-  \"default-cuda-cxx-flags\" : \"${CUDA_CXX_FLAGS}\",
   \"default-is-explicit-multipass\" : \"false\",
   \"default-save-temps\" : \"false\"
 }
 ")
 
-file(WRITE ${SYCLCC_CONFIG_FILE_PATH} ${SYCLCC_CONFIG_FILE})
 
+set(ACPP_CUDA_CONFIG_FILE "{
+  \"default-nvcxx\"     : \"${NVCXX_COMPILER}\",
+  \"default-cuda-path\" : \"${CUDA_TOOLKIT_ROOT_DIR}\",
+  \"default-cuda-link-line\" : \"${CUDA_LINK_LINE}\",
+  \"default-cuda-cxx-flags\" : \"${CUDA_CXX_FLAGS}\"
+}
+")
+
+
+set(ACPP_ROCM_CONFIG_FILE "{
+  \"default-rocm-path\" : \"${ROCM_PATH}\",
+  \"default-rocm-link-line\" : \"${ROCM_LINK_LINE}\",
+  \"default-rocm-cxx-flags\" : \"${ROCM_CXX_FLAGS}\"
+}
+")
+
+file(WRITE ${ACPP_CONFIG_FILE_PATH}/acpp-core.json ${ACPP_CORE_CONFIG_FILE})
+if(WITH_CUDA_BACKEND)
+  file(WRITE ${ACPP_CONFIG_FILE_PATH}/acpp-cuda.json ${ACPP_CUDA_CONFIG_FILE})
+endif()
+if(WITH_ROCM_BACKEND)
+  file(WRITE ${ACPP_CONFIG_FILE_PATH}/acpp-rocm.json ${ACPP_ROCM_CONFIG_FILE})
+endif()
 
 
 # must stay after add_subdirectory(src) as HIPSYCL_COMMON_LIBRARY_OUTPUT_NAME is declared there
@@ -461,10 +613,18 @@ configure_file(
 
 install(DIRECTORY include/CL DESTINATION include/AdaptiveCpp/ FILES_MATCHING PATTERN "*.hpp")
 install(DIRECTORY include/SYCL DESTINATION include/AdaptiveCpp/ FILES_MATCHING PATTERN "*.hpp")
+
 install(DIRECTORY include/hipSYCL DESTINATION include/AdaptiveCpp/ FILES_MATCHING PATTERN "*.hpp")
 install(DIRECTORY include/hipSYCL DESTINATION include/AdaptiveCpp/ FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY include/hipSYCL/std DESTINATION include/AdaptiveCpp/hipSYCL/ )
 install(FILES ${PROJECT_BINARY_DIR}/include/hipSYCL/common/config.hpp DESTINATION include/AdaptiveCpp/hipSYCL/common/)
+
+# This part of the installation process can be simplified once the source directory has been
+# renamed from hipSYCL to AdaptiveCpp.
+install(DIRECTORY include/hipSYCL/ DESTINATION include/AdaptiveCpp/AdaptiveCpp FILES_MATCHING PATTERN "*.hpp")
+install(DIRECTORY include/hipSYCL/ DESTINATION include/AdaptiveCpp/AdaptiveCpp FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY include/hipSYCL/std/ DESTINATION include/AdaptiveCpp/AdaptiveCpp/std )
+install(FILES ${PROJECT_BINARY_DIR}/include/hipSYCL/common/config.hpp DESTINATION include/AdaptiveCpp/AdaptiveCpp/common/)
 
 if(NOT WIN32)
 # Windows is case-insensitive, so don't copy to sycl/sycl.hpp as
@@ -476,7 +636,13 @@ install(PROGRAMS bin/acpp DESTINATION bin RENAME syclcc)
 install(PROGRAMS bin/acpp DESTINATION bin RENAME syclcc-clang)
 
 
-install(FILES ${SYCLCC_CONFIG_FILE_PATH} DESTINATION ${SYCLCC_CONFIG_FILE_INSTALL_DIR})
+install(FILES ${ACPP_CONFIG_FILE_PATH}/acpp-core.json DESTINATION ${ACPP_CONFIG_FILE_INSTALL_DIR})
+if(WITH_CUDA_BACKEND)
+  install(FILES ${ACPP_CONFIG_FILE_PATH}/acpp-cuda.json DESTINATION ${ACPP_CONFIG_FILE_INSTALL_DIR})
+endif()
+if(WITH_ROCM_BACKEND)
+  install(FILES ${ACPP_CONFIG_FILE_PATH}/acpp-rocm.json DESTINATION ${ACPP_CONFIG_FILE_INSTALL_DIR})
+endif()
 
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)

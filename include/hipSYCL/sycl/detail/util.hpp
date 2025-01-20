@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018, 2019 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_UTIL_HPP
 #define HIPSYCL_UTIL_HPP
 
@@ -80,21 +62,26 @@ extract_tuple(Tuple&& tuple, std::index_sequence<Ints...>) {
 template<class F, typename... Args>
 void separate_last_argument_and_apply(F&& f, Args&& ... args) {
   
-  static_assert(
-      sizeof...(args) > 0,
-      "Cannot extract last argument from template pack for empty pack");
-  
-  constexpr std::size_t last_index = sizeof...(args) - 1;
+  if constexpr(sizeof...(args) > 0) {
+    
+    constexpr std::size_t last_index = sizeof...(args) - 1;
 
-  auto last_element =
-      std::get<last_index>(std::forward_as_tuple(std::forward<Args>(args)...));
+    auto last_element =
+        std::get<last_index>(std::forward_as_tuple(std::forward<Args>(args)...));
 
-  auto preceding_elements =
-      extract_tuple(std::forward_as_tuple(std::forward<Args>(args)...),
-                    std::make_index_sequence<last_index>());
+    auto preceding_elements =
+        extract_tuple(std::forward_as_tuple(std::forward<Args>(args)...),
+                      std::make_index_sequence<last_index>());
 
-  std::apply(f,
-             std::tuple_cat(std::make_tuple(last_element), preceding_elements));
+    std::apply(f,
+              std::tuple_cat(std::make_tuple(last_element), preceding_elements));
+  } else {
+    // We still need the if constexpr, because otherwise parsing may
+    // not terminate in case of an empty argument pack, and the
+    // static_assert is never evaluated.
+    static_assert(sizeof...(args) > 0,
+                  "Invalid call with empty argument list");
+  }
 }
 
 

@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2020 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include <algorithm>
 
 #include "hipSYCL/runtime/device_id.hpp"
@@ -69,9 +51,12 @@ void execute_if_buffer_requirement(dag_node_ptr node, Handler h) {
   }
 }
 
+// Ensures that the argument node has the default device assigned, as well as the
+// appropriate bind_to_device execution hint.
 void assign_devices_or_default(dag_node_ptr node, device_id default_device) {
   if (!node->get_execution_hints().has_hint<hints::bind_to_device>()) {
     node->assign_to_device(default_device);
+    node->get_execution_hints().set_hint(rt::hints::bind_to_device{default_device});
   } else {
     node->assign_to_device(node->get_execution_hints()
                                .get_hint<hints::bind_to_device>()
@@ -106,11 +91,11 @@ result ensure_allocation_exists(runtime *rt,
     // cause backends to align to the largest supported type.
     // TODO: A better solution might be to select a custom alignment
     // best on sizeof(T). This requires querying backend alignment capabilities.
-    void *ptr = allocator->allocate(0, num_bytes);
+    void *ptr = rt::allocate_device(allocator, 0, num_bytes);
 
     if(!ptr)
       return register_error(
-                 __hipsycl_here(),
+                 __acpp_here(),
                  error_info{
                      "dag_direct_scheduler: Lazy memory allocation has failed.",
                      error_type::memory_allocation_error});
@@ -149,7 +134,7 @@ void for_each_explicit_operation(
 
             if (update_sources.empty()) {
               register_error(
-                  __hipsycl_here(),
+                  __acpp_here(),
                   error_info{"dag_direct_scheduler: Could not obtain data "
                              "update sources when trying to materialize "
                              "implicit requirement"});
@@ -272,7 +257,7 @@ result submit_requirement(runtime* rt, dag_node_ptr req) {
       for_each_explicit_operation(req, [&](operation *op) {
         if (!op->is_data_transfer()) {
           res = make_error(
-              __hipsycl_here(),
+              __acpp_here(),
               error_info{
                   "dag_direct_scheduler: only data transfers are supported "
                   "as operations generated from implicit requirements.",
@@ -297,27 +282,20 @@ result submit_requirement(runtime* rt, dag_node_ptr req) {
           // However, at the end of submit() below this section, we then try to
           // to update the data state for device assigned to the node.
           // For a host accessor, because we have in fact updated the host memory,
-          // get_assigned_device() must return the original device at this point.
+          // we need to be able to obtain the original device at this point.
           //
-          // Currently we solve this by retrieving the original assigned device,
-          // changing it to the one we wish to carry out the memcpy during submission,
-          // and then change back afterwards.
-          // This is not pretty. Is this a hint that there are actual two different
-          // parts of the DAG node that we should distinguish architecturally - the SYCL
-          // view and the backend execution view?
+          // We solve this by ensuring that the bind_to_device hint is always present
+          // and returns the target device id. get_assigned_device() instead reaturns
+          // the device that has processed the data transfer.
+          //
+          // We CANNOT assign_to_device the original device after the submit call,
+          // since the executors need to know which device actually has processed
+          // the operation to setup dependencies correctly.
           auto original_device = req->get_assigned_device();
           req->assign_to_device(execution_config.second);
           submit(execution_config.first, req, op);
-          req->assign_to_device(original_device);
         }
       });
-    } else {
-      HIPSYCL_DEBUG_WARNING
-          << "dag_direct_scheduler: Detected a requirement that is neither of "
-             "discard access mode (SYCL 1.2.1) nor no_init property (SYCL 2020) "
-             "that accesses uninitialized data. Consider changing to "
-             "discard/no_init. Optimizing potential data transfers away."
-          << std::endl;
     }
   }
   if (!res.is_success())
@@ -333,13 +311,18 @@ result submit_requirement(runtime* rt, dag_node_ptr req) {
   // that regions are valid after discard accesses 
   execute_if_buffer_requirement(
       req, [&](buffer_memory_requirement *bmem_req) {
+        assert(req->get_execution_hints().has_hint<rt::hints::bind_to_device>());
+        rt::device_id requirement_target_device =
+            req->get_execution_hints()
+                .get_hint<rt::hints::bind_to_device>()
+                ->get_device_id();
         if (access_mode == sycl::access::mode::read) {
           bmem_req->get_data_region()->mark_range_valid(
-              req->get_assigned_device(), bmem_req->get_access_offset3d(),
+              requirement_target_device, bmem_req->get_access_offset3d(),
               bmem_req->get_access_range3d());
         } else {
           bmem_req->get_data_region()->mark_range_current(
-              req->get_assigned_device(), bmem_req->get_access_offset3d(),
+              requirement_target_device, bmem_req->get_access_offset3d(),
               bmem_req->get_access_range3d());
         }
       });
@@ -354,7 +337,7 @@ dag_direct_scheduler::dag_direct_scheduler(runtime* rt)
 
 void dag_direct_scheduler::submit(dag_node_ptr node) {
   if (!node->get_execution_hints().has_hint<hints::bind_to_device>()) {
-    register_error(__hipsycl_here(),
+    register_error(__acpp_here(),
                    error_info{"dag_direct_scheduler: Direct scheduler does not "
                               "support DAG nodes not bound to devices.",
                               error_type::feature_not_supported});
@@ -376,7 +359,7 @@ void dag_direct_scheduler::submit(dag_node_ptr node) {
     if(auto req = weak_req.lock()) {
       if (!req->get_operation()->is_requirement()) {
         if (!req->is_submitted()) {
-          register_error(__hipsycl_here(),
+          register_error(__acpp_here(),
                     error_info{"dag_direct_scheduler: Direct scheduler does not "
                                 "support processing multiple unsubmitted nodes",
                                 error_type::feature_not_supported});

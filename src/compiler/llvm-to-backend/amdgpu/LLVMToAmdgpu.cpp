@@ -1,35 +1,19 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2022 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/llvm-to-backend/amdgpu/LLVMToAmdgpu.hpp"
 #include "hipSYCL/compiler/llvm-to-backend/AddressSpaceInferencePass.hpp"
 #include "hipSYCL/compiler/llvm-to-backend/Utils.hpp"
 #include "hipSYCL/compiler/sscp/IRConstantReplacer.hpp"
-#include "hipSYCL/glue/llvm-sscp/s2_ir_constants.hpp"
+#include "hipSYCL/compiler/utils/LLVMUtils.hpp"
+#include "hipSYCL/glue/llvm-sscp/jit-reflection/queries.hpp"
 #include "hipSYCL/common/filesystem.hpp"
 #include "hipSYCL/common/debug.hpp"
 #include <llvm/IR/DataLayout.h>
@@ -40,6 +24,7 @@
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
@@ -50,14 +35,17 @@
 #include <algorithm>
 #include <memory>
 #include <cassert>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
+#include <sstream>
 
-#ifdef HIPSYCL_SSCP_AMDGPU_USE_HIPRTC
+#ifdef ACPP_HIPRTC_LINK
 #define __HIP_PLATFORM_AMD__
 #include <hip/hiprtc.h>
 #endif
+
 
 namespace hipsycl {
 namespace compiler {
@@ -66,53 +54,185 @@ namespace {
 
 const char* TargetTriple = "amdgcn-amd-amdhsa";
 
+std::string getRocmClang(const std::string& RocmPath) {
+  std::string ClangPath;
+
+  std::string GuessedHipccPath =
+      common::filesystem::join_path(RocmPath, std::vector<std::string>{"bin", "hipcc"});
+  if (llvm::sys::fs::exists(GuessedHipccPath))
+    ClangPath = GuessedHipccPath;
+  else {
+#if defined(ACPP_HIPCC_PATH)
+    ClangPath = ACPP_HIPCC_PATH;
+#else
+    ClangPath = ACPP_CLANG_PATH;
+#endif
+  }
+
+  return ClangPath;
 }
+
+#if LLVM_VERSION_MAJOR < 16
+template<class T>
+using optional_t = llvm::Optional<T>;
+#else
+template<class T>
+using optional_t = std::optional<T>;
+#endif
+
+bool getCommandOutput(const std::string &Program, const llvm::SmallVector<std::string> &Invocation,
+                      std::string &Out) {
+
+  auto OutputFile = llvm::sys::fs::TempFile::create("acpp-sscp-query-%%%%%%.txt");
+
+  std::string OutputFilename = OutputFile->TmpName;
+
+  auto E = OutputFile.takeError();
+  if(E){
+    return false;
+  }
+
+  AtScopeExit DestroyOutputFile([&]() { auto Err = OutputFile->discard(); });
+
+  llvm::SmallVector<llvm::StringRef> InvocationRef;
+  for(const auto& S: Invocation)
+    InvocationRef.push_back(S);
+
+  llvm::SmallVector<optional_t<llvm::StringRef>> Redirections;
+  std::string RedirectedOutputFile = OutputFile->TmpName;
+  Redirections.push_back(optional_t<llvm::StringRef>{});
+  Redirections.push_back(llvm::StringRef{RedirectedOutputFile});
+  Redirections.push_back(llvm::StringRef{RedirectedOutputFile});
+
+  int R = llvm::sys::ExecuteAndWait(Program, InvocationRef, {}, Redirections); 
+  if(R != 0)
+    return false;
+
+  auto ReadResult =
+    llvm::MemoryBuffer::getFile(OutputFile->TmpName, true);
+  
+  Out = ReadResult.get()->getBuffer();
+  return true;
+}
+
+}
+
+
 
 
 class RocmDeviceLibs {
 public:
-  static bool getOclAbiVersionLibrary(const std::string &DeviceLibsPath,
-                                      std::string &OclAbiVersionLibOut) {
-    static std::string OclABIVersionLib;
-    int MaxABIVersion = 0;
 
-    if(OclABIVersionLib.empty()) {
-      auto Files = common::filesystem::list_regular_files(DeviceLibsPath);
-      for(const auto& F : Files) {
-        std::string Begin = "oclc_abi_version_";
-        auto PosBeg = F.find(Begin);
-        auto PosEnd = F.find(".bc");
-        if (PosBeg != std::string::npos && PosEnd != std::string::npos) {
-          std::string ABIVersionString =
-              F.substr(PosBeg + Begin.size(), PosEnd - PosBeg - Begin.size());
-          int ABIVersion = std::stoi(ABIVersionString);
-          if(ABIVersion < MaxABIVersion) {
-            OclABIVersionLib = F;
-            MaxABIVersion = ABIVersion;
-          }
-        }
+  static bool determineRequiredDeviceLibs(const std::string& RocmPath,
+                                          const std::string& DeviceLibsPath,
+                                          const std::string& TargetDevice,
+                                          std::vector<std::string>& BitcodeFiles,
+                                          bool IsFastMath = false,
+                                          int ForceCodeObjectModel = -1) {
+    
+
+    llvm::SmallVector<std::string> Invocation;
+    auto OffloadArchFlag = "--cuda-gpu-arch="+TargetDevice;
+    auto RocmPathFlag = "--rocm-path="+std::string{RocmPath};
+    auto RocmDeviceLibsFlag = "--rocm-device-lib-path="+DeviceLibsPath;
+
+    std::string ClangPath = getRocmClang(RocmPath);
+    
+    HIPSYCL_DEBUG_INFO << "LLVMToAmdgpu: Invoking " << ClangPath
+                       << " to determine ROCm device library list\n";
+
+    Invocation = {ClangPath, "-x", "ir",
+      "--cuda-device-only", "-O3",
+      OffloadArchFlag,
+      "-nogpuinc",
+      "/dev/null",
+      "--hip-link",
+      "-###"
+    };
+    if(IsFastMath) {
+      Invocation.push_back("-ffast-math");
+      Invocation.push_back("-fno-hip-fp32-correctly-rounded-divide-sqrt");
+    }
+    
+    if(!llvmutils::ends_with(llvm::StringRef{ClangPath}, "hipcc")) {
+      // Normally we try to use hipcc. However, when that fails,
+      // we may have fallen back to clang. In that case we may
+      // have to additionally set --rocm-path and --rocm-device-lib-path.
+      //
+      // When using hipcc, this is generally not needed as hipcc already
+      // knows how ROCm is configured. It might also have been specially
+      // tweaked by non-standard ROCm pacakges to find ROCm in unusual places.
+      //
+      // So we should not use --rocm-path and --rock-device-lib-path unless
+      // we really have to.
+      Invocation.push_back(RocmPathFlag);
+      Invocation.push_back(RocmDeviceLibsFlag);
+
+      if (!llvm::sys::fs::exists(common::filesystem::join_path(DeviceLibsPath, "ockl.bc"))) {
+        HIPSYCL_DEBUG_WARNING
+            << "LLVMToAmdgpu: Configured ROCm device bitcode library path " << DeviceLibsPath
+            << " does not seem to contain key ROCm bitcode libraries such as ockl.bc. It is "
+               "possible that builtin bitcode linking is incomplete.\n";
       }
     }
+    
+    std::string Output;
+    if(!getCommandOutput(ClangPath, Invocation, Output))
+      return false;
 
-    OclAbiVersionLibOut = OclABIVersionLib;
-    return !OclABIVersionLib.empty();
+    std::stringstream sstr{Output};
+    std::string CurrentComponent;
+    
+    bool ConsumeNext = false;
+    while(sstr) {
+      sstr >> CurrentComponent;
+      if(ConsumeNext) {
+        ConsumeNext = false;
+        if(CurrentComponent.find('\"') == 0)
+          CurrentComponent = CurrentComponent.substr(1);
+        if(CurrentComponent.find('\"') != std::string::npos)
+          CurrentComponent = CurrentComponent.substr(0, CurrentComponent.size() - 1);
+
+        auto OclcABIPos = CurrentComponent.find("oclc_abi_version");
+        if(ForceCodeObjectModel > 0 &&  (OclcABIPos != std::string::npos)) {
+          CurrentComponent.erase(OclcABIPos);
+          CurrentComponent += "oclc_abi_version_" + std::to_string(ForceCodeObjectModel)+".bc";
+        }
+        
+        BitcodeFiles.push_back(CurrentComponent);
+      } else if(CurrentComponent == "\"-mlink-builtin-bitcode\"")
+        ConsumeNext = true;
+    }
+
+    return true;
   }
 };
 
 LLVMToAmdgpuTranslator::LLVMToAmdgpuTranslator(const std::vector<std::string> &KN)
-    : LLVMToBackendTranslator{sycl::sscp::backend::amdgpu, KN}, KernelNames{KN} {
-  RocmDeviceLibsPath = common::filesystem::join_path(HIPSYCL_ROCM_PATH,
+    : LLVMToBackendTranslator{static_cast<int>(sycl::AdaptiveCpp_jit::compiler_backend::amdgpu), KN, KN},
+      KernelNames{KN} {
+  RocmDeviceLibsPath = common::filesystem::join_path(RocmPath,
                                                      std::vector<std::string>{"amdgcn", "bitcode"});
 }
-
 
 bool LLVMToAmdgpuTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
   
   M.setTargetTriple(TargetTriple);
+#if LLVM_VERSION_MAJOR >= 18
+  M.setDataLayout("e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:"
+                  "32-p8:128:128-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:"
+                  "256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9");
+#elif LLVM_VERSION_MAJOR >= 17
+  M.setDataLayout(
+      "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128-"
+      "i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-"
+      "n32:64-S32-A5-G1-ni:7:8");
+#else
   M.setDataLayout(
       "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-i64:64-v16:16-v24:32-v32:32-"
       "v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7");
-
+#endif
+  
   AddressSpaceMap ASMap = getAddressSpaceMap();
 
   KernelFunctionParameterRewriter ParamRewriter{
@@ -128,7 +248,7 @@ bool LLVMToAmdgpuTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
   for(auto KernelName : KernelNames) {
     HIPSYCL_DEBUG_INFO << "LLVMToAmdgpu: Setting up kernel " << KernelName << "\n";
     if(auto* F = M.getFunction(KernelName)) {
-      F->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+      applyKernelProperties(F);
     }
   }
 
@@ -155,30 +275,22 @@ bool LLVMToAmdgpuTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
   llvm::AlwaysInlinerPass AIP;
   AIP.run(M, *PH.ModuleAnalysisManager);
 
-#if! defined(HIPSYCL_SSCP_AMDGPU_USE_HIPRTC)
-
-  if(!this->linkBitcodeFile(M, common::filesystem::join_path(RocmDeviceLibsPath, "ockl.bc")))
-    return false;
-  if(!this->linkBitcodeFile(M, common::filesystem::join_path(RocmDeviceLibsPath, "ocml.bc")))
-    return false;
-    // Needed as a workaround for some ROCm versions
-  #ifdef HIPSYCL_SSCP_AMDGPU_FORCE_OCLC_ABI_VERSION
-    std::string OclABIVersionLib;
-    if (!RocmDeviceLibs::getOclAbiVersionLibrary(RocmDeviceLibsPath, OclABIVersionLib)) {
-      this->registerError("Could not find ROCm oclc ABI version bitcode library");
-      return false;
+  if(llvm::Metadata* MD  = M.getModuleFlag("amdgpu_code_object_version")) {
+    if(auto* V = llvm::cast<llvm::ValueAsMetadata>(MD)) {
+      if (llvm::ConstantInt* CI = llvm::dyn_cast<llvm::ConstantInt>(V->getValue())) {
+        if (CI->getBitWidth() <= 32) {
+          CodeObjectModelVersion = CI->getSExtValue();
+        }
+      }
     }
-    if(!this->linkBitcodeFile(M, OclABIVersionLib))
-      return false;
-  #endif
-#endif
+  }
 
   return true;
 }
 
 
 bool LLVMToAmdgpuTranslator::translateToBackendFormat(llvm::Module &FlavoredModule, std::string &Out) {
-#ifdef HIPSYCL_SSCP_AMDGPU_USE_HIPRTC
+#ifdef ACPP_HIPRTC_LINK
   HIPSYCL_DEBUG_INFO << "LLVMToAmdgpu: Invoking hipRTC...\n";
 
   std::string ModuleString;
@@ -187,87 +299,7 @@ bool LLVMToAmdgpuTranslator::translateToBackendFormat(llvm::Module &FlavoredModu
 
   return hiprtcJitLink(ModuleString, Out);
 #else
-  auto InputFile = llvm::sys::fs::TempFile::create("hipsycl-sscp-amdgpu-%%%%%%.bc");
-  auto OutputFile = llvm::sys::fs::TempFile::create("hipsycl-sscp-amdgpu-%%%%%%.hipfb");
-  
-  std::string OutputFilename = OutputFile->TmpName;
-  
-  auto E = InputFile.takeError();
-  if(E){
-    this->registerError("LLVMToAmdgpu: Could not create temp file: "+InputFile->TmpName);
-    return false;
-  }
-
-  AtScopeExit DestroyInputFile([&]() { auto Err = InputFile->discard(); });
-  AtScopeExit DestroyOutputFile([&]() { auto Err = OutputFile->discard(); });
-
-  std::error_code EC;
-  llvm::raw_fd_ostream InputStream{InputFile->FD, false};
-  
-  llvm::WriteBitcodeToFile(FlavoredModule, InputStream);
-  InputStream.flush();
-
-  llvm::SmallVector<llvm::StringRef, 16> Invocation;
-  auto OffloadArchFlag = "--offload-arch="+TargetDevice;
-  auto RocmPathFlag = "--rocm-path="+std::string{HIPSYCL_ROCM_PATH};
-  auto RocmDeviceLibsFlag = "--rocm-device-lib-path="+RocmDeviceLibsPath;
-  
-  std::string ClangPath = HIPSYCL_CLANG_PATH;
-
-  if(OnlyGenerateAssembly) {
-    Invocation = {ClangPath, "-cc1",
-                  "-triple", TargetTriple,
-                  "-target-cpu", TargetDevice,
-                  "-O3",
-                  "-S",
-                  "-x", "ir",
-                  "-mllvm", "-amdgpu-early-inline-all=true",
-                  "-mllvm", "-amdgpu-function-calls=false",
-                  "-o",
-                  OutputFilename,
-                  InputFile->TmpName};
-  } else {
-    
-    Invocation = {ClangPath, "-x", "hip",
-      "--cuda-device-only", "-O3",
-      RocmPathFlag,
-      RocmDeviceLibsFlag,
-      OffloadArchFlag,
-      "-nogpuinc",
-      "-mllvm", "-amdgpu-early-inline-all=true",
-      "-mllvm", "-amdgpu-function-calls=false",
-      "-Xclang", "-mlink-bitcode-file", "-Xclang", InputFile->TmpName,
-      "-o", OutputFilename, 
-      "/dev/null"};
-  }
-
-  std::string ArgString;
-  for(const auto& S : Invocation) {
-    ArgString += S;
-    ArgString += " ";
-  }
-  HIPSYCL_DEBUG_INFO << "LLVMToAmdgpu: Invoking " << ArgString << "\n";
-
-  int R = llvm::sys::ExecuteAndWait(
-      ClangPath, Invocation);
-  
-  if(R != 0) {
-    this->registerError("LLVMToAmdgpu: clang invocation failed with exit code " +
-                        std::to_string(R));
-    return false;
-  }
-  
-  auto ReadResult =
-      llvm::MemoryBuffer::getFile(OutputFile->TmpName, -1);
-  
-  if(auto Err = ReadResult.getError()) {
-    this->registerError("LLVMToAmdgpu: Could not read result file"+Err.message());
-    return false;
-  }
-  
-  Out = ReadResult->get()->getBuffer();
-  
-  return true;
+  return clangJitLink(FlavoredModule, Out);
 #endif
 }
 
@@ -278,22 +310,21 @@ bool LLVMToAmdgpuTranslator::applyBuildOption(const std::string &Option, const s
   } else if (Option == "rocm-device-libs-path") {
     RocmDeviceLibsPath = Value;
     return true; 
-  }
-
-  return false;
-}
-
-bool LLVMToAmdgpuTranslator::applyBuildFlag(const std::string &Flag) {
-  if(Flag == "assemble-only") {
-    OnlyGenerateAssembly = true;
+  } else if (Option == "rocm-path") {
+    RocmPath = Value;
     return true;
   }
 
   return false;
 }
 
+bool LLVMToAmdgpuTranslator::applyBuildFlag(const std::string &Flag) {
+
+  return false;
+}
+
 bool LLVMToAmdgpuTranslator::hiprtcJitLink(const std::string &Bitcode, std::string &Output) {
-#ifdef HIPSYCL_SSCP_AMDGPU_USE_HIPRTC
+#ifdef ACPP_HIPRTC_LINK
   // Currently hipRTC link does not take into account options anyway.
   // It just compiles for the currently active HIP device.
   std::vector<hiprtcJIT_option> options {};
@@ -307,9 +338,34 @@ bool LLVMToAmdgpuTranslator::hiprtcJitLink(const std::string &Bitcode, std::stri
     return false;
   }
 
+
   void* Data = static_cast<void*>(const_cast<char*>(Bitcode.data()));
   err = hiprtcLinkAddData(LS, HIPRTC_JIT_INPUT_LLVM_BITCODE, Data, Bitcode.size(),
                           "hipSYCL SSCP Bitcode", 0, 0, 0);
+
+  auto addBitcodeFile = [&](const std::string &BCFileName) -> bool {
+    std::string Path = common::filesystem::join_path(RocmDeviceLibsPath, BCFileName);
+    auto ReadResult = llvm::MemoryBuffer::getFile(Path, false);
+    if(auto Err = ReadResult.getError()) {
+      this->registerError("LLVMToAmdgpu: Could not open file: " + Path);
+      return false;
+    }
+
+    llvm::StringRef BC = ReadResult->get()->getBuffer();
+    hiprtcLinkAddData(LS, HIPRTC_JIT_INPUT_LLVM_BITCODE, const_cast<char *>(BC.data()), BC.size(),
+                      BCFileName.c_str(), 0, 0, 0);
+
+    return true;
+  };
+
+  std::vector<std::string> DeviceLibs;
+  RocmDeviceLibs::determineRequiredDeviceLibs(RocmPath, RocmDeviceLibsPath, TargetDevice,
+                                              DeviceLibs, IsFastMath, CodeObjectModelVersion);
+  for(const auto& Lib : DeviceLibs) {
+    HIPSYCL_DEBUG_INFO << "LLVMToAmdgpu: Linking with bitcode file: " << Lib << "\n";
+    addBitcodeFile(Lib);
+  }
+
 
   if(err != HIPRTC_SUCCESS) {
     this->registerError("LLVMToAmdgpu: Could not add hipRTC data for bitcode linking");
@@ -320,7 +376,9 @@ bool LLVMToAmdgpuTranslator::hiprtcJitLink(const std::string &Bitcode, std::stri
   std::size_t Size = 0;
   err = hiprtcLinkComplete(LS, &Binary, &Size);
   if(err != HIPRTC_SUCCESS) {
-    this->registerError("LLVMToAmdgpu: hiprtcLinkComplete() failed");
+    this->registerError("LLVMToAmdgpu: hiprtcLinkComplete() failed. Setting the environment "
+                        "variables AMD_COMGR_SAVE_TEMPS=1 AMD_COMGR_REDIRECT_LOGS=stdout "
+                        "AMD_COMGR_EMIT_VERBOSE_LOGS=1 might reveal more information.");
     return false;
   }
     
@@ -337,6 +395,102 @@ bool LLVMToAmdgpuTranslator::hiprtcJitLink(const std::string &Bitcode, std::stri
 #else
   return false;
 #endif
+}
+
+bool LLVMToAmdgpuTranslator::clangJitLink(llvm::Module& FlavoredModule, std::string& Out) {
+  
+  auto addBitcodeFile = [&](const std::string &BCFileName) -> bool {
+    std::string Path = common::filesystem::join_path(RocmDeviceLibsPath, BCFileName);
+    auto ReadResult = llvm::MemoryBuffer::getFile(Path, false);
+    if(auto Err = ReadResult.getError()) {
+      this->registerError("LLVMToAmdgpu: Could not open file: " + Path);
+      return false;
+    }
+
+    llvm::StringRef BC = ReadResult->get()->getBuffer();
+    this->linkBitcodeFile(FlavoredModule, Path, "", "", false);
+
+    return true;
+  };
+
+  std::vector<std::string> DeviceLibs;
+  RocmDeviceLibs::determineRequiredDeviceLibs(RocmPath, RocmDeviceLibsPath, TargetDevice,
+                                              DeviceLibs);
+  for(const auto& BC : DeviceLibs)
+    addBitcodeFile(BC);
+
+  auto InputFile = llvm::sys::fs::TempFile::create("acpp-sscp-amdgpu-%%%%%%.bc");
+  auto OutputFile = llvm::sys::fs::TempFile::create("acpp-sscp-amdgpu-%%%%%%.hipfb");
+  auto DummyFile = llvm::sys::fs::TempFile::create("acpp-sscp-amdgpu-dummy-%%%%%%.cpp");
+
+  std::string OutputFilename = OutputFile->TmpName;
+
+  auto checkFileError = [&](auto& F) {
+    auto E = F.takeError();
+    if(E){
+      this->registerError("LLVMToAmdgpu: Could not create temp file: "+InputFile->TmpName);
+      return false;
+    }
+    return true;
+  };
+
+  if(!checkFileError(InputFile)) return false;
+  if(!checkFileError(DummyFile)) return false;
+
+  AtScopeExit DestroyInputFile([&]() { auto Err = InputFile->discard(); });
+  AtScopeExit DestroyOutputFile([&]() { auto Err = OutputFile->discard(); });
+  AtScopeExit DestroyDummyFile([&]() { auto Err = DummyFile->discard(); });
+  
+  llvm::raw_fd_ostream InputStream{InputFile->FD, false};
+  llvm::raw_fd_ostream DummyStream{DummyFile->FD, false};
+
+  llvm::WriteBitcodeToFile(FlavoredModule, InputStream);
+  InputStream.flush();
+   
+  std::string DummyText = "int main() {}\n";
+  DummyStream.write(DummyText.c_str(), DummyText.size());
+  DummyStream.flush();
+
+  auto OffloadArchFlag = "--cuda-gpu-arch="+TargetDevice;
+  std::string ClangPath = ACPP_CLANG_PATH;
+
+  llvm::SmallVector<std::string> Invocation = {
+      ClangPath, "-x", "hip", "-O3", "-nogpuinc", OffloadArchFlag, "--cuda-device-only",
+        "-Xclang", "-mlink-bitcode-file", "-Xclang", InputFile->TmpName,
+        "-o",  OutputFilename, DummyFile->TmpName
+  };
+
+  llvm::SmallVector<llvm::StringRef> InvocationRef;
+  for(auto &S : Invocation)
+    InvocationRef.push_back(S);
+
+  std::string ArgString;
+  for(const auto& S : Invocation) {
+    ArgString += S;
+    ArgString += " ";
+  }
+  HIPSYCL_DEBUG_INFO << "LLVMToAmdgpu: Invoking " << ArgString << "\n";
+
+  int R = llvm::sys::ExecuteAndWait(
+      InvocationRef[0], InvocationRef);
+
+  if(R != 0) {
+    this->registerError("LLVMToAmdgpu: clang invocation failed with exit code " +
+                        std::to_string(R));
+    return false;
+  }
+
+  auto ReadResult =
+      llvm::MemoryBuffer::getFile(OutputFile->TmpName, -1);
+
+  if(auto Err = ReadResult.getError()) {
+    this->registerError("LLVMToAmdgpu: Could not read result file"+Err.message());
+    return false;
+  }
+
+  Out = ReadResult->get()->getBuffer();
+
+  return true;
 }
 
 bool LLVMToAmdgpuTranslator::isKernelAfterFlavoring(llvm::Function& F) {
@@ -356,6 +510,34 @@ AddressSpaceMap LLVMToAmdgpuTranslator::getAddressSpaceMap() const {
   ASMap[AddressSpace::ConstantGlobalVariableDefault] = 4;
 
   return ASMap;
+}
+
+void LLVMToAmdgpuTranslator::migrateKernelProperties(llvm::Function* From, llvm::Function* To) {
+  removeKernelProperties(From);
+  applyKernelProperties(To);
+}
+
+void LLVMToAmdgpuTranslator::applyKernelProperties(llvm::Function* F) {
+  F->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+
+  if (KnownGroupSizeX != 0 && KnownGroupSizeY != 0 && KnownGroupSizeZ != 0) {
+    int FlatGroupSize = KnownGroupSizeX * KnownGroupSizeY * KnownGroupSizeZ;
+
+    if (!F->hasFnAttribute("amdgpu-flat-work-group-size"))
+      F->addFnAttr("amdgpu-flat-work-group-size",
+                   std::to_string(FlatGroupSize) + "," + std::to_string(FlatGroupSize));
+  }
+}
+
+void LLVMToAmdgpuTranslator::removeKernelProperties(llvm::Function* F) {
+  if(F->getCallingConv() == llvm::CallingConv::AMDGPU_KERNEL) {
+    F->setCallingConv(llvm::CallingConv::C);
+    for(int i = 0; i < F->getFunctionType()->getNumParams(); ++i)
+      if(F->getArg(i)->hasAttribute(llvm::Attribute::ByRef))
+        F->getArg(i)->removeAttr(llvm::Attribute::ByRef);
+  }
+  if(F->hasFnAttribute("amdgpu-flat-work-group-size"))
+    F->removeFnAttr("amdgpu-flat-work-group-size");
 }
 
 std::unique_ptr<LLVMToBackendTranslator>

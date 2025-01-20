@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2020 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include <omp.h>
 #include <limits>
 
@@ -55,11 +37,11 @@ std::size_t omp_hardware_context::get_max_memcpy_concurrency() const {
 }
 
 std::string omp_hardware_context::get_device_name() const {
-  return "hipSYCL OpenMP host device";
+  return "AdaptiveCpp OpenMP host device";
 }
 
 std::string omp_hardware_context::get_vendor_name() const {
-  return "the hipSYCL project";
+  return "the AdaptiveCpp project";
 }
 
 std::string omp_hardware_context::get_device_arch() const {
@@ -122,6 +104,13 @@ bool omp_hardware_context::has(device_support_aspect aspect) const {
     return true;
     break;
   case device_support_aspect::sscp_kernels:
+#ifdef HIPSYCL_WITH_SSCP_COMPILER
+    return true;
+#else
+    return false;
+#endif
+    break;
+  case device_support_aspect::work_item_independent_forward_progress:
     return false;
     break;
   }
@@ -133,6 +122,8 @@ std::size_t
 omp_hardware_context::get_property(device_uint_property prop) const {
   switch (prop) {
   case device_uint_property::max_compute_units:
+    // Do not change this; heuristics in algorithms library
+    // use this.
     return omp_get_num_procs();
     break;
   case device_uint_property::max_global_size0:
@@ -276,6 +267,13 @@ omp_hardware_context::get_property(device_uint_property prop) const {
   case device_uint_property::vendor_id:
     return std::numeric_limits<std::size_t>::max();
     break;
+  case device_uint_property::architecture:
+    // TODO
+    return 0;
+    break;
+  case device_uint_property::backend_id:
+    return static_cast<int>(backend_id::omp);
+    break;
   }
   assert(false && "Invalid device property");
   return 0;
@@ -298,12 +296,22 @@ std::string omp_hardware_context::get_profile() const {
   return "FULL_PROFILE";
 }
 
+std::size_t omp_hardware_context::get_platform_index() const {
+  return 0;
+}
+
+std::size_t omp_hardware_manager::get_num_platforms() const {
+  return 1;
+}
+
+
+
 std::size_t omp_hardware_manager::get_num_devices() const { return 1; }
 
 
 hardware_context* omp_hardware_manager::get_device(std::size_t index) {
   if(index != 0) {
-    register_error(__hipsycl_here(),
+    register_error(__acpp_here(),
                    error_info{"omp_hardware_manager: Requested device " +
                                   std::to_string(index) + " does not exist.",
                               error_type::invalid_parameter_error});

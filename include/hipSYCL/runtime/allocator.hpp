@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_RUNTIME_ALLOCATOR_HPP
 #define HIPSYCL_RUNTIME_ALLOCATOR_HPP
 
@@ -50,14 +33,24 @@ struct pointer_info {
 class backend_allocator
 {
 public:
-  virtual void *allocate(size_t min_alignment, size_t size_bytes) = 0;
-  // Optimized host memory - may be page-locked, device mapped if supported
-  virtual void* allocate_optimized_host(size_t min_alignment, size_t bytes) = 0;
-  virtual void free(void *mem) = 0;
-  
 
-  /// Allocate memory accessible both from the host and the backend
-  virtual void *allocate_usm(size_t bytes) = 0;
+  /// Raw allocation mechanism that does not interact with the runtime's
+  /// event handler mechanism. Should not be called directly in most cases.
+  virtual void *raw_allocate(size_t min_alignment, size_t size_bytes) = 0;
+  /// Optimized host memory - may be page-locked, device mapped if supported
+  /// Raw mechanism that does not interact with the runtime's
+  /// event handler mechanism. Should not be called directly in most cases.
+  virtual void* raw_allocate_optimized_host(size_t min_alignment, size_t bytes) = 0;
+  /// Raw free mechanism that does not interact with the runtime's
+  /// event handler mechanism. Should not be called directly in most cases.
+  virtual void raw_free(void *mem) = 0;
+  /// Allocate memory accessible both from the host and the backend.
+  /// Raw mechanism that does not interact with the runtime's
+  /// event handler mechanism. Should not be called directly in most cases.
+  virtual void *raw_allocate_usm(size_t bytes) = 0;
+  
+  virtual device_id get_device() const = 0;
+
   virtual bool is_usm_accessible_from(backend_descriptor b) const = 0;
 
   // Query the given pointer for its properties. If pointer is unknown,
@@ -69,6 +62,14 @@ public:
 
   virtual ~backend_allocator(){}
 };
+
+void *allocate_device(backend_allocator *alloc, size_t min_alignment,
+                      size_t size_bytes);
+void *allocate_host(backend_allocator *alloc, size_t min_alignment,
+                              size_t bytes);
+void *allocate_shared(backend_allocator* alloc, size_t bytes);
+void deallocate(backend_allocator* alloc, void *mem);
+
 
 }
 }

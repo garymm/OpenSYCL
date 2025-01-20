@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2020 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_RT_SETTINGS_HPP
 #define HIPSYCL_RT_SETTINGS_HPP
 
@@ -70,6 +53,41 @@ std::istream &operator>>(std::istream &istr, scheduler_type &out);
 std::istream &operator>>(std::istream &istr, visibility_mask_t &out);
 std::istream &operator>>(std::istream &istr, default_selector_behavior& out);
 
+template <class T>
+bool try_get_environment_variable(const std::string& name, T& out) {
+  std::string env_name = name;
+
+  std::transform(env_name.begin(), env_name.end(), env_name.begin(), ::toupper);
+
+  std::string env;
+  if (const char *env_value =
+          std::getenv(("ACPP_"+env_name).c_str())) {
+    env_name = "ACPP_"+env_name;
+    env = std::string{env_value};
+  } else if (const char *env_value =
+          std::getenv(("HIPSYCL_"+env_name).c_str())) {
+    env_name = "HIPSYCL_"+env_name;
+    env = std::string{env_value};
+  }
+  
+  if (!env.empty()) {
+    
+    T val;
+    std::stringstream sstr{std::string{env}};
+    sstr >> val;
+
+    if (sstr.fail() || sstr.bad()) {
+      std::cerr << "AdaptiveCpp settings parsing: Could not parse value of environment "
+                    "variable: "
+                << env_name << std::endl;
+      return false;
+    }
+    out = val;
+    return true;
+  }
+  return false;
+}
+
 enum class setting {
   debug_level,
   scheduler_type,
@@ -83,7 +101,14 @@ enum class setting {
   max_cached_nodes,
   sscp_failed_ir_dump_directory,
   gc_trigger_batch_size,
-  ocl_no_shared_context
+  ocl_no_shared_context,
+  ocl_show_all_devices,
+  no_jit_cache_population,
+  adaptivity_level,
+  jitopt_iads_relative_threshold,
+  jitopt_iads_relative_eviction_threshold,
+  jitopt_iads_relative_threshold_min_data,
+  enable_allocation_tracking
 };
 
 template <setting S> struct setting_trait {};
@@ -114,6 +139,15 @@ HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::sscp_failed_ir_dump_directory,
                               "sscp_failed_ir_dump_directory", std::string)
 HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::gc_trigger_batch_size, "rt_gc_trigger_batch_size", std::size_t)
 HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::ocl_no_shared_context, "rt_ocl_no_shared_context", bool)
+HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::ocl_show_all_devices, "rt_ocl_show_all_devices", bool)
+HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::no_jit_cache_population, "rt_no_jit_cache_population", bool)
+HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::adaptivity_level, "adaptivity_level", int)
+HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::jitopt_iads_relative_threshold, "jitopt_iads_relative_threshold", double)
+HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::jitopt_iads_relative_eviction_threshold, "jitopt_iads_relative_eviction_threshold", double)
+HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::jitopt_iads_relative_threshold_min_data,
+                              "jitopt_iads_relative_threshold_min_data",
+                              std::size_t)
+HIPSYCL_RT_MAKE_SETTING_TRAIT(setting::enable_allocation_tracking, "allocation_tracking", bool)
 
 class settings
 {
@@ -146,6 +180,20 @@ public:
       return _gc_trigger_batch_size;
     } else if constexpr(S == setting::ocl_no_shared_context) {
       return _ocl_no_shared_context;
+    } else if constexpr(S == setting::ocl_show_all_devices) {
+      return _ocl_show_all_devices;
+    } else if constexpr(S == setting::no_jit_cache_population) {
+      return _no_jit_cache_population;
+    } else if constexpr(S == setting::adaptivity_level) {
+      return _adaptivity_level;
+    } else if constexpr(S == setting::jitopt_iads_relative_threshold) {
+      return _jitopt_iads_relative_threshold;
+    } else if constexpr(S == setting::jitopt_iads_relative_threshold_min_data) {
+      return _jitopt_iads_relative_threshold_min_data;
+    } else if constexpr(S == setting::jitopt_iads_relative_eviction_threshold) {
+      return _jitopt_iads_relative_eviction_threshold;
+    } else if constexpr(S == setting::enable_allocation_tracking) {
+      return _enable_allocation_tracking;
     }
     return typename setting_trait<S>::type{};
   }
@@ -185,43 +233,31 @@ public:
         get_environment_variable_or_default<setting::gc_trigger_batch_size>(128);
     _ocl_no_shared_context =
         get_environment_variable_or_default<setting::ocl_no_shared_context>(false);
+    _ocl_show_all_devices =
+        get_environment_variable_or_default<setting::ocl_show_all_devices>(false);
+    _no_jit_cache_population =
+        get_environment_variable_or_default<setting::no_jit_cache_population>(false);
+    _adaptivity_level =
+        get_environment_variable_or_default<setting::adaptivity_level>(1);
+    
+    _jitopt_iads_relative_threshold =
+        get_environment_variable_or_default<setting::jitopt_iads_relative_threshold>(0.8);
+    _jitopt_iads_relative_eviction_threshold =
+        get_environment_variable_or_default<setting::jitopt_iads_relative_eviction_threshold>(0.1);
+    _jitopt_iads_relative_threshold_min_data =
+        get_environment_variable_or_default<setting::jitopt_iads_relative_threshold_min_data>(1024);
+    _enable_allocation_tracking =
+        get_environment_variable_or_default<setting::enable_allocation_tracking>(false);
   }
 
 private:
   template <setting S, class T>
   T get_environment_variable_or_default(const T &default_value) {
-    std::string env;
-
-    if (const char *env_value =
-            std::getenv(get_environment_variable_name<S>("ACPP_").c_str())) {
-      env = std::string{env_value};
-    } else if (const char *env_value =
-            std::getenv(get_environment_variable_name<S>("HIPSYCL_").c_str())) {
-      env = std::string{env_value};
-    }
-    
-    if (!env.empty()) {
-      
-      T val;
-      std::stringstream sstr{std::string{env}};
-      sstr >> val;
-
-      if (sstr.fail() || sstr.bad()) {
-        std::cerr << "AdaptiveCpp prelaunch: Could not parse value of environment "
-                     "variable: "
-                  << get_environment_variable_name<S>("ACPP_") << std::endl;
-        return default_value;
-      }
-      return val;
+    T out;
+    if(try_get_environment_variable(setting_trait<S>::str, out)) {
+      return out;
     }
     return default_value;
-  }
-
-  template <setting S>
-  std::string get_environment_variable_name(const std::string &prefix) {
-    std::string id = setting_trait<S>::str;
-    std::transform(id.begin(), id.end(), id.begin(), ::toupper);
-    return prefix+id;
   }
 
   int _debug_level;
@@ -237,6 +273,13 @@ private:
   std::size_t _gc_trigger_batch_size;
   visibility_mask_t _visibility_mask;
   bool _ocl_no_shared_context;
+  bool _ocl_show_all_devices;
+  bool _no_jit_cache_population;
+  int _adaptivity_level;
+  double _jitopt_iads_relative_threshold;
+  double _jitopt_iads_relative_eviction_threshold;
+  std::size_t _jitopt_iads_relative_threshold_min_data;
+  bool _enable_allocation_tracking;
 };
 
 }

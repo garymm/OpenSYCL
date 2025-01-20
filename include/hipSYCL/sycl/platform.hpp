@@ -1,35 +1,18 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_PLATFORM_HPP
 #define HIPSYCL_PLATFORM_HPP
 
 #include <vector>
+#include <string>
 
 #include "hipSYCL/runtime/application.hpp"
 #include "hipSYCL/runtime/backend.hpp"
@@ -39,6 +22,7 @@
 #include "device_selector.hpp"
 #include "info/info.hpp"
 #include "version.hpp"
+
 
 namespace hipsycl {
 namespace sycl {
@@ -50,13 +34,25 @@ class platform {
 public:
   platform() : _platform{detail::get_host_device().get_backend(), 0} {}
   
-  platform(rt::backend_id backend)
-      : _platform{backend, 0} {}
+  platform(rt::platform_id platform)
+  : _platform{platform} {}
+
+  platform(rt::backend_id backend, std::size_t platform_index)
+      : _platform{backend, platform_index} {}
 
   template<class DeviceSelector>
   explicit platform(const DeviceSelector &deviceSelector) {
     auto dev = detail::select_devices(deviceSelector)[0];
-    this->_platform = rt::platform_id{dev._device_id};
+    
+    rt::backend *b =
+        _requires_runtime.get()->backends().get(dev.get_backend());
+    std::size_t platform_index =
+        b->get_hardware_manager()
+            ->get_device(dev.AdaptiveCpp_device_id().get_id())
+            ->get_platform_index();
+
+    this->_platform =
+        rt::platform_id{dev.get_backend(), static_cast<int>(platform_index)};
   }
 
 
@@ -72,12 +68,15 @@ public:
       bool is_gpu = b->get_hardware_manager()->get_device(dev)->is_gpu();
 
       bool include_device = false;
-      if (type == info::device_type::all ||
-          (type == info::device_type::accelerator && is_gpu) ||
-          (type == info::device_type::gpu && is_gpu) ||
-          (type == info::device_type::host && is_cpu) ||
-          (type == info::device_type::cpu && is_cpu)) {
-        include_device = true;
+      if (b->get_hardware_manager()->get_device(dev)->get_platform_index() ==
+          _platform.get_platform()) {
+        if (type == info::device_type::all ||
+            (type == info::device_type::accelerator && is_gpu) ||
+            (type == info::device_type::gpu && is_gpu) ||
+            (type == info::device_type::host && is_cpu) ||
+            (type == info::device_type::cpu && is_cpu)) {
+          include_device = true;
+        }
       }
 
       if (include_device)
@@ -120,7 +119,10 @@ public:
     rt::runtime_keep_alive_token requires_runtime;
 
     requires_runtime.get()->backends().for_each_backend([&](rt::backend *b) {
-      result.push_back(platform{b->get_unique_backend_id()});
+      for (std::size_t i = 0;
+           i < b->get_hardware_manager()->get_num_platforms(); ++i) {
+        result.push_back(platform{b->get_unique_backend_id(), i});
+      }
     });
 
     return result;
@@ -134,10 +136,18 @@ public:
     return !(lhs == rhs);
   }
 
-  std::size_t hipSYCL_hash_code() const {
+  std::size_t AdaptiveCpp_hash_code() const {
     return std::hash<rt::platform_id>{}(_platform);
   }
 
+
+  [[deprecated("Use AdaptiveCpp_hash_code()")]]
+  auto hipSYCL_hash_code() const {
+    return AdaptiveCpp_hash_code();
+  }
+
+  
+  context khr_get_default_context() const;
 private:
   rt::platform_id _platform;
   rt::runtime_keep_alive_token _requires_runtime;
@@ -158,12 +168,16 @@ HIPSYCL_SPECIALIZE_GET_INFO(platform, version)
 HIPSYCL_SPECIALIZE_GET_INFO(platform, name)
 {
   rt::backend_id b = _platform.get_backend();
-  return _requires_runtime.get()->backends().get(b)->get_name();
+  std::string platform_name =
+      _requires_runtime.get()->backends().get(b)->get_name();
+  platform_name +=
+      " (platform " + std::to_string(_platform.get_platform()) + ")";
+      return platform_name;
 }
 
 HIPSYCL_SPECIALIZE_GET_INFO(platform, vendor)
 {
-  return "The hipSYCL project";
+  return "The AdaptiveCpp project";
 }
 
 HIPSYCL_SPECIALIZE_GET_INFO(platform, extensions)
@@ -172,7 +186,8 @@ HIPSYCL_SPECIALIZE_GET_INFO(platform, extensions)
 }
 
 inline platform device::get_platform() const  {
-  return platform{_device_id.get_backend()};
+  return platform{_device_id.get_backend(),
+                  static_cast<int>(get_rt_device()->get_platform_index())};
 }
 
 }// namespace sycl
@@ -185,7 +200,7 @@ struct hash<hipsycl::sycl::platform>
 {
   std::size_t operator()(const hipsycl::sycl::platform& p) const
   {
-    return p.hipSYCL_hash_code();
+    return p.AdaptiveCpp_hash_code();
   }
 };
 

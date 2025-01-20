@@ -1,34 +1,16 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/stdpar/MallocToUSM.hpp"
 #include "hipSYCL/compiler/cbs/IRUtils.hpp"
+#include "hipSYCL/compiler/utils/LLVMUtils.hpp"
 
 
 
@@ -90,7 +72,7 @@ bool NameStartsWithItaniumIdentifier(llvm::StringRef Name, llvm::StringRef Ident
 
 bool isRestrictedToRegularMalloc(llvm::Function* F) {
   llvm::StringRef Name = F->getName();
-  if(!Name.startswith("_Z"))
+  if(!llvmutils::starts_with(Name, "_Z"))
     return false;
   
   if(NameStartsWithItaniumIdentifier(Name, "hipsycl"))
@@ -101,7 +83,9 @@ bool isRestrictedToRegularMalloc(llvm::Function* F) {
 
 bool isStdFunction(llvm::Function* F) {
   llvm::StringRef Name = F->getName();
-  if(Name.startswith("_ZNSt") || Name.startswith("_ZSt"))
+  if(llvmutils::starts_with(Name, "_ZNSt") ||
+     llvmutils::starts_with(Name, "_ZSt") ||
+     llvmutils::starts_with(Name, "_ZNKSt"))
     return true;
   return false;
 }
@@ -309,10 +293,8 @@ llvm::PreservedAnalyses MallocToUSMPass::run(llvm::Module &M, llvm::ModuleAnalys
   }
 
   // Internalize memory management definitions
-  for(auto* F: ManagedFreeFunctions) {
-    F->setVisibility(llvm::GlobalValue::HiddenVisibility);
+  for(auto* F: ManagedFreeFunctions)
     F->setLinkage(llvm::GlobalValue::LinkOnceODRLinkage);
-  }
 
   // Ideally, we could insert an ABI tag for every function that uses USM, such that external
   // libraries do not ODR-resolve symbols to functions using USM when the libraries have not

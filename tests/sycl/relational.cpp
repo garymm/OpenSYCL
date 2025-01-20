@@ -1,29 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 
 #include "sycl_test_suite.hpp"
 
@@ -86,7 +70,7 @@ namespace {
   // utility functions for generic testing
 
   template<typename DT, int D>
-  auto get_subvector(vec<DT, 16> v) {
+  auto get_subvector(const vec<DT, 16> &v) {
     if constexpr(D==0) {
       return v.template swizzle<0>();
     } else if constexpr(D==2) {
@@ -135,13 +119,14 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(rel_genfloat_unary, T,
   {
     auto inputs  = in.get_host_access();
     auto outputs = out.get_host_access();
-    inputs[0] = get_subvector<DT, D>({NAN, INFINITY, INFINITY - INFINITY,
-                                      0.0, 0.0/0.0, 1.0/0.0, sqrt(-1),
-                                      std::numeric_limits<float>::min(),
-                                      std::numeric_limits<float>::denorm_min(),
-                                      std::numeric_limits<double>::min(),
-                                      std::numeric_limits<double>::denorm_min(),
-                                      -1.0, 17.0, -4.0, -2.0, 3.0});
+    s::vec<DT, 16> v{NAN, INFINITY, INFINITY - INFINITY,
+		     0.0, 0.0/0.0, 1.0/0.0, sqrt(-1),
+		     std::numeric_limits<float>::min(),
+		     std::numeric_limits<float>::denorm_min(),
+		     std::numeric_limits<double>::min(),
+		     std::numeric_limits<double>::denorm_min(),
+		     -1.0, 17.0, -4.0, -2.0, 3.0};
+    inputs[0] = get_subvector<DT, D>(v);
     for(int i = 0; i < FUN_COUNT; ++i) {
       outputs[i] = OutType{IntType{0}};
     }
@@ -157,7 +142,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(rel_genfloat_unary, T,
       outputs[i++] = s::isfinite(inputs[0]);
       outputs[i++] = s::isinf(inputs[0]);
       outputs[i++] = s::isnan(inputs[0]);
-#ifndef HIPSYCL_LIBKERNEL_CUDA_NVCXX
+#ifndef ACPP_LIBKERNEL_CUDA_NVCXX
       outputs[i++] = s::isnormal(inputs[0]);
 #endif
       outputs[i++] = s::signbit(inputs[0]);
@@ -175,7 +160,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(rel_genfloat_unary, T,
       BOOST_TEST(comp(outputs[i++], c) == std::isfinite(comp(inputs[0], c)));
       BOOST_TEST(comp(outputs[i++], c) == std::isinf(comp(inputs[0], c)));
       BOOST_TEST(comp(outputs[i++], c) == std::isnan(comp(inputs[0], c)));
-#ifndef HIPSYCL_LIBKERNEL_CUDA_NVCXX
+#ifndef ACPP_LIBKERNEL_CUDA_NVCXX
       BOOST_TEST(comp(outputs[i++], c) == std::isnormal(comp(inputs[0], c)));
 #endif
       BOOST_TEST(comp(outputs[i++], c) == std::signbit(comp(inputs[0], c)));

@@ -56,7 +56,7 @@ VectorShape VectorShapeTransformer::getObservedShape(const BasicBlock &observerB
   return vecInfo.getObservedShape(LI, observerBlock, val);
 }
 
-static Type *getElementType(Type *Ty) {
+[[maybe_unused]] static Type *getElementType(Type *Ty) {
   if (auto VecTy = dyn_cast<VectorType>(Ty)) {
     return VecTy->getElementType();
   }
@@ -119,15 +119,7 @@ VectorShape VectorShapeTransformer::computeIdealShapeForInst(const Instruction &
 
   switch (I.getOpcode()) {
   case Instruction::Alloca: {
-    const int alignment = vecInfo.getVectorWidth();
-    auto *AllocatedType = llvm::cast<llvm::AllocaInst>(I).getAllocatedType();
-    const bool Vectorizable = false;
-
-    if (Vectorizable) {
-      int typeStoreSize = (int)(layout.getTypeStoreSize(AllocatedType));
-      return VectorShape::strided(typeStoreSize, alignment);
-    }
-
+    // AdaptiveCpp CBS: we moved allocas out of the wi-loop.
     return VectorShape::varying();
   }
   case Instruction::Br: {
@@ -163,7 +155,7 @@ VectorShape VectorShapeTransformer::computeIdealShapeForInst(const Instruction &
       // These coincide because a >= b is equivalent to !(a < b)
       {
         const int vectorWidth = (int)vecInfo.getVectorWidth();
-        const int stride = diffShape.getStride();
+        const stride_t stride = diffShape.getStride();
         const int alignment = diffShape.getAlignmentFirst();
 
         if (stride >= 0 && alignment >= stride * vectorWidth)
@@ -274,10 +266,10 @@ VectorShape VectorShapeTransformer::computeIdealShapeForInst(const Instruction &
     }
 
     // next: query resolver mechanism // TODO account for predicate
-    bool hasVaryingBlockPredicate = false;
-    if (!vecInfo.getVaryingPredicateFlag(BB, hasVaryingBlockPredicate)) {
-      hasVaryingBlockPredicate = false; // assume uniform block pred unless shown otherwise
-    }
+    // bool hasVaryingBlockPredicate = false;
+    // if (!vecInfo.getVaryingPredicateFlag(BB, hasVaryingBlockPredicate)) {
+    //   hasVaryingBlockPredicate = false; // assume uniform block pred unless shown otherwise
+    // }
 
     // todo: do we need this in hipSYCL? should be inlined already anyways
     //    auto resolver = platInfo.getResolver(callee->getName(), *callee->getFunctionType(),
@@ -512,7 +504,7 @@ VectorShape VectorShapeTransformer::computeShapeForCastInst(const CastInst &cast
   const auto &BB = *castI.getParent();
   const Value *castOp = castI.getOperand(0);
   const VectorShape &castOpShape = getObservedShape(BB, *castOp);
-  const int castOpStride = castOpShape.getStride();
+  const stride_t castOpStride = castOpShape.getStride();
 
   const int aligned = !returnsVoidPtr(castI) ? castOpShape.getAlignmentFirst() : 1;
 

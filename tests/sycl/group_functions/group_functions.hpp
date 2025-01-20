@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018-2020 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 
 #ifndef TESTS_GROUP_FUNCTIONS_HH
 #define TESTS_GROUP_FUNCTIONS_HH
@@ -34,7 +17,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
-#include <math.h>
+#include <cmath>
 #include <type_traits>
 
 #include <sstream>
@@ -42,9 +25,9 @@
 
 using namespace cl;
 
-#ifndef __HIPSYCL_ENABLE_SPIRV_TARGET__
 #define HIPSYCL_ENABLE_GROUP_ALGORITHM_TESTS
-#endif
+
+
 
 #ifdef TESTS_GROUPFUNCTION_FULL
 using test_types =
@@ -150,15 +133,15 @@ bool compare_type(T x1, T x2) {
 }
 
 template<typename T, typename std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 T initialize_type(T init) {
   return init;
 }
 
 template<typename T, typename std::enable_if_t<!std::is_arithmetic_v<T>, int> = 0>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 T initialize_type(elementType<T> init) {
-  constexpr size_t N = T::get_count();
+  constexpr size_t N = T::size();
 
   if constexpr (std::is_same_v<elementType<T>, bool>)
     return T{init};
@@ -184,7 +167,7 @@ T initialize_type(elementType<T> init) {
 }
 
 template<typename T, typename std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 T get_offset(size_t margin, size_t divisor = 1) {
   
   if (std::numeric_limits<T>::max() <= margin) {
@@ -201,7 +184,7 @@ T get_offset(size_t margin, size_t divisor = 1) {
 }
 
 template<typename T, typename std::enable_if_t<!std::is_arithmetic_v<T>, int> = 0>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 T get_offset(size_t margin, size_t divisor = 1) {
   using eT = elementType<T>;
   return initialize_type<T>(get_offset<eT>(margin + 16, divisor));
@@ -237,7 +220,7 @@ inline void create_bool_test_data(std::vector<char> &buffer, size_t local_size,
 }
 
 template<typename T, int Line>
-void check_binary_reduce(std::vector<T> buffer, size_t local_size, size_t global_size,
+void check_binary_reduce(std::vector<T> buffer, std::vector<T> input, size_t local_size, size_t global_size,
                          std::vector<bool> expected, std::string name,
                          size_t break_size = 0, size_t offset = 0) {
   std::vector<std::string> cases{"everything except one false", "everything false",
@@ -284,6 +267,7 @@ void test_nd_group_function_1d(size_t elements_per_thread, DataGenerator dg,
   for (int i = 0; i < local_sizes.size(); ++i) {
     size_t local_size  = local_sizes[i];
     size_t global_size = global_sizes[i];
+    uint32_t used_sgrp_size = 0;
 
     std::vector<T> host_buf(elements_per_thread * global_size, T{});
 
@@ -293,11 +277,12 @@ void test_nd_group_function_1d(size_t elements_per_thread, DataGenerator dg,
 
     {
       sycl::buffer<T, 1> buf{host_buf.data(), host_buf.size()};
+      sycl::buffer<uint32_t, 1> used_sgrp_size_buffer(&used_sgrp_size, 1);
 
       queue.submit([&](sycl::handler &cgh) {
         using namespace sycl::access;
         auto acc = buf.template get_access<mode::read_write>(cgh);
-
+        auto sgpr_size_acc = used_sgrp_size_buffer.template get_access<mode::read_write>(cgh);
         cgh.parallel_for<class test_kernel<1, CallingLine, T>>(
           sycl::nd_range<1>{global_size, local_size},
           [=](sycl::nd_item<1> item) {
@@ -305,13 +290,13 @@ void test_nd_group_function_1d(size_t elements_per_thread, DataGenerator dg,
           auto sg = item.get_sub_group();
 
           T local_value = acc[item.get_global_linear_id()];
-
+          sgpr_size_acc[0] =  sg.get_max_local_range().size();
           f(acc, item.get_global_linear_id(), sg, g, local_value);
         });
       });
     }
 
-    vf(host_buf, original_host_buf, local_size, global_size);
+    vf(host_buf, original_host_buf,used_sgrp_size, local_size, global_size);
   }
 }
 
@@ -362,7 +347,7 @@ void test_nd_group_function_2d(size_t elements_per_thread, DataGenerator dg,
       });
     }
 
-    vf(host_buf, original_host_buf, local_size * local_size, global_size * global_size);
+    vf(host_buf, original_host_buf,0, local_size * local_size, global_size * global_size);
   }
 }
 

@@ -1,9 +1,10 @@
-project(adaptivecpp-tests)
 cmake_minimum_required(VERSION 3.12)
+project(adaptivecpp-tests)
 
 set(Boost_USE_STATIC_LIBS off)
 set(BUILD_SHARED_LIBS on)
 set(REDUCED_LOCAL_MEM_USAGE OFF CACHE BOOL "Only run tests with reduced local memory usage to allow running on hardware with little local memory.")
+set(ACPP_TEST_WORK_GROUP_SHUFFLE_EXT OFF CACHE BOOL "Enable work group shuffles tests that are an AdaptiveCpp extension.")
 
 find_package(Boost COMPONENTS unit_test_framework REQUIRED)
 
@@ -39,6 +40,9 @@ if(REDUCED_LOCAL_MEM_USAGE)
   add_definitions(-DREDUCED_LOCAL_MEM_USAGE)
 endif()
 
+if(ACPP_TEST_WORK_GROUP_SHUFFLE_EXT)
+  add_definitions(-DACPP_TEST_WORK_GROUP_SHUFFLE_EXT)
+endif()
 
 #Use add_definitions for now for older cmake versions
 cmake_policy(SET CMP0005 NEW)
@@ -50,12 +54,29 @@ if(WIN32)
 add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_USE_MATH_DEFINES)
 endif()
 
+#OMP_ROOT and/or OpenMP_ROOT is not defined by default on Mac
+if (APPLE)
+  if (NOT DEFINED OpenMP_ROOT AND NOT DEFINED OMP_ROOT)
+    execute_process(COMMAND brew list libomp
+    COMMAND grep libomp.a 
+    COMMAND sed -E "s/\\/lib\\/.*//"
+    OUTPUT_VARIABLE DefaultOMP_ROOT
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+    # fater linkage will error out if it is not found
+    set(OpenMP_ROOT ${DefaultOMP_ROOT})
+    set(OMP_ROOT ${DefaultOMP_ROOT})
+  endif()
+endif()
+find_package(OpenMP REQUIRED)
+
 add_subdirectory(platform_api)
 
 add_subdirectory(dump_test)
+
+
 add_executable(device_compilation_tests device_compilation_tests.cpp)
-target_include_directories(device_compilation_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(device_compilation_tests PRIVATE ${Boost_LIBRARIES})
+target_include_directories(device_compilation_tests PRIVATE ${Boost_INCLUDE_DIRS} ${OpenMP_CXX_INCLUDE_DIRS})
 add_sycl_to_target(TARGET device_compilation_tests)
 
 add_executable(sycl_tests
@@ -86,12 +107,13 @@ add_executable(sycl_tests
   sycl/sycl_test_suite.cpp 
   sycl/usm.cpp
   sycl/vec.cpp
-  sycl/queue.cpp)
+  sycl/queue.cpp
+  sycl/multi_ptr.cpp
+)
 
 # Also test instant submission mode
-target_compile_definitions(sycl_tests PRIVATE -DHIPSYCL_ALLOW_INSTANT_SUBMISSION=1)
-target_include_directories(sycl_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(sycl_tests PRIVATE ${Boost_LIBRARIES})
+target_compile_definitions(sycl_tests PRIVATE -DACPP_ALLOW_INSTANT_SUBMISSION=1)
+target_include_directories(sycl_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR} ${OpenMP_CXX_INCLUDE_DIRS})
 add_sycl_to_target(TARGET sycl_tests)
 
 add_executable(rt_tests 
@@ -99,45 +121,55 @@ add_executable(rt_tests
   runtime/dag_builder.cpp
   runtime/data.cpp)
 
-target_include_directories(rt_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(rt_tests PRIVATE ${Boost_LIBRARIES} Threads::Threads)
+target_include_directories(rt_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR} ${OpenMP_CXX_INCLUDE_DIRS})
+target_link_libraries(rt_tests PRIVATE Threads::Threads)
 add_sycl_to_target(TARGET rt_tests)
 
 # We cannot enable building them unconditionally at the moment,
-# because --hipsycl-stdpar is not compatible with all --hipsycl-targets
+# because --acpp-stdpar is not compatible with all --acpp-targets
 # values. Enabling them in all cases would break some existing test flows.
 if(WITH_PSTL_TESTS)
   add_executable(pstl_tests 
     pstl/pstl_test_suite.cpp
     pstl/std_math.cpp
+    pstl/std_atomic.cpp
     pstl/all_of.cpp
     pstl/any_of.cpp
     pstl/copy.cpp
     pstl/copy_if.cpp
     pstl/copy_n.cpp
+    pstl/exclusive_scan.cpp
     pstl/fill.cpp
     pstl/fill_n.cpp
     pstl/for_each.cpp
     pstl/for_each_n.cpp
     pstl/generate.cpp
     pstl/generate_n.cpp
+    pstl/inclusive_scan.cpp
     pstl/memory.cpp
+    pstl/merge.cpp
     pstl/none_of.cpp
     pstl/reduce.cpp
     pstl/replace.cpp
     pstl/replace_if.cpp
     pstl/replace_copy.cpp
     pstl/replace_copy_if.cpp
+    pstl/sort.cpp
     pstl/transform.cpp
-    pstl/transform_reduce.cpp)
+    pstl/transform_reduce.cpp
+    pstl/transform_inclusive_scan.cpp
+    pstl/transform_exclusive_scan.cpp
+    pstl/pointer_validation.cpp
+    pstl/allocation_map.cpp
+    pstl/free_space_map.cpp)
 
   target_compile_options(pstl_tests PRIVATE --acpp-stdpar --acpp-stdpar-unconditional-offload)
   # pstl tests cannot run with global memory allocation hijacking, because apparently
   # the boost test headers allocate memory that is then transferred to libboost_unit_tests
   # which then cannot free it anymore. We we need to selectively enable it only for the actual test code.
   target_compile_definitions(pstl_tests PRIVATE -DHIPSYCL_STDPAR_MEMORY_MANAGEMENT_DEFAULT_DISABLED)
-  target_include_directories(pstl_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(pstl_tests PRIVATE ${Boost_LIBRARIES} Threads::Threads -ltbb)
+  target_include_directories(pstl_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR} ${OpenMP_CXX_INCLUDE_DIRS})
+  target_link_libraries(pstl_tests PRIVATE Threads::Threads -ltbb)
   add_sycl_to_target(TARGET pstl_tests)
 endif()
 

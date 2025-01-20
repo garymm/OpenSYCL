@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/cbs/IRUtils.hpp"
 
 #include "hipSYCL/compiler/cbs/SplitterAnnotationAnalysis.hpp"
@@ -43,6 +25,26 @@
 #include <llvm/Transforms/Utils/PromoteMemToReg.h>
 
 namespace hipsycl::compiler::utils {
+using namespace hipsycl::compiler::cbs;
+
+void replaceUsesOfGVWith(llvm::Function &F, llvm::StringRef GlobalVarName, llvm::Value *To, llvm::StringRef LogPrefix) {
+  auto M = F.getParent();
+  auto GV = M->getGlobalVariable(GlobalVarName);
+  if (!GV)
+    return;
+
+  HIPSYCL_DEBUG_INFO << LogPrefix << "RUOGVW: " << *GV << " with " << *To << "\n";
+  llvm::SmallVector<llvm::Instruction *> ToErase;
+  for (auto U : GV->users()) {
+    if (auto I = llvm::dyn_cast<llvm::LoadInst>(U); I && I->getFunction() == &F) {
+      HIPSYCL_DEBUG_INFO << LogPrefix << "RUOGVW: " << *I << " with " << *To << "\n";
+      I->replaceAllUsesWith(To);
+    }
+  }
+  for (auto I : ToErase)
+    I->eraseFromParent();
+}
+
 llvm::Loop *updateDtAndLi(llvm::LoopInfo &LI, llvm::DominatorTree &DT, const llvm::BasicBlock *B,
                           llvm::Function &F) {
   DT.reset();
@@ -120,7 +122,7 @@ llvm::CallInst *createBarrier(llvm::Instruction *InsertBefore, SplitterAnnotatio
   return llvm::CallInst::Create(F, "", InsertBefore);
 }
 
-bool checkedInlineFunction(llvm::CallBase *CI, llvm::StringRef PassPrefix) {
+bool checkedInlineFunction(llvm::CallBase *CI, llvm::StringRef PassPrefix, int NoInlineDebugLevel) {
   if (CI->getCalledFunction()->isIntrinsic() ||
       CI->getCalledFunction()->getName() == BarrierIntrinsicName)
     return false;
@@ -129,17 +131,15 @@ bool checkedInlineFunction(llvm::CallBase *CI, llvm::StringRef PassPrefix) {
   const auto CalleeName = CI->getCalledFunction()->getName().str();
 
   llvm::InlineFunctionInfo IFI;
-#if LLVM_VERSION_MAJOR <= 10
-  llvm::InlineResult ILR = llvm::InlineFunction(CI, IFI, nullptr);
-  if (!static_cast<bool>(ILR)) {
-    HIPSYCL_DEBUG_WARNING << PassPrefix << " failed to inline function <" << calleeName << ">: '"
-                          << ILR.message << "'\n";
-#else
+
   llvm::InlineResult ILR = llvm::InlineFunction(*CI, IFI);
   if (!ILR.isSuccess()) {
-    HIPSYCL_DEBUG_WARNING << PassPrefix << " failed to inline function <" << CalleeName << ">: '"
-                          << ILR.getFailureReason() << "'\n";
-#endif
+    HIPSYCL_DEBUG_STREAM(NoInlineDebugLevel, (NoInlineDebugLevel >= HIPSYCL_DEBUG_LEVEL_INFO
+                                                  ? HIPSYCL_DEBUG_PREFIX_INFO
+                                                  : HIPSYCL_DEBUG_PREFIX_WARNING))
+        << PassPrefix << " failed to inline function <" << CalleeName << ">: '"
+        << ILR.getFailureReason() << "'\n";
+
     return false;
   }
 
@@ -295,7 +295,8 @@ llvm::Loop *getOneWorkItemLoop(const llvm::LoopInfo &LI) {
 }
 
 llvm::BasicBlock *getWorkItemLoopBodyEntry(const llvm::Loop *WILoop) {
-  llvm::BasicBlock *Entry;
+  llvm::BasicBlock *Entry = nullptr;
+  assert(!llvm::successors(WILoop->getHeader()).empty() && "WILoop must have a body!");
   for (auto *Succ : llvm::successors(WILoop->getHeader())) {
     if (Succ != WILoop->getExitBlock()) {
       Entry = Succ;
@@ -320,12 +321,7 @@ llvm::BasicBlock *simplifyLatch(const llvm::Loop *L, llvm::BasicBlock *Latch, ll
 llvm::BasicBlock *splitEdge(llvm::BasicBlock *Root, llvm::BasicBlock *&Target, llvm::LoopInfo *LI,
                             llvm::DominatorTree *DT) {
   auto *NewBlockAtEdge = llvm::SplitEdge(Root, Target, DT, LI, nullptr);
-#if LLVM_VERSION_MAJOR < 12
-  // NewBlockAtEdge should be between Root and Target
-  // SplitEdge behaviour was fixed in LLVM 12 to actually ensure this.
-  if (NewBlockAtEdge->getTerminator()->getSuccessor(0) != Target)
-    std::swap(NewBlockAtEdge, Target);
-#endif
+
   assert(NewBlockAtEdge->getTerminator()->getSuccessor(0) == Target &&
          "NewBlockAtEdge must be predecessor to Target");
   return NewBlockAtEdge;
@@ -370,7 +366,7 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::Loop &L, llvm::Value *I
   llvm::SmallVector<llvm::AllocaInst *, 8> WL;
   for (auto &I : *EntryBlock) {
     if (auto *Alloca = llvm::dyn_cast<llvm::AllocaInst>(&I)) {
-      if (llvm::MDNode *MD = Alloca->getMetadata(hipsycl::compiler::MDKind::Arrayified))
+      if (Alloca->getMetadata(hipsycl::compiler::MDKind::Arrayified))
         continue; // already arrayificated
       if (!std::all_of(Alloca->user_begin(), Alloca->user_end(), [&LoopBlocks](llvm::User *User) {
             auto *Inst = llvm::dyn_cast<llvm::Instruction>(User);
@@ -506,11 +502,7 @@ void copyDgbValues(llvm::Value *From, llvm::Value *To, llvm::Instruction *Insert
 }
 
 void dropDebugLocation(llvm::Instruction &I) {
-#if LLVM_VERSION_MAJOR >= 12
   I.dropLocation();
-#else
-  I.setDebugLoc({});
-#endif
 }
 
 void dropDebugLocation(llvm::BasicBlock *BB) {

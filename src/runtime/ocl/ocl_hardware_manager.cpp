@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/runtime/application.hpp"
 #include "hipSYCL/runtime/device_id.hpp"
 #include "hipSYCL/runtime/error.hpp"
@@ -33,8 +16,10 @@
 #include "hipSYCL/runtime/ocl/ocl_hardware_manager.hpp"
 #include "hipSYCL/runtime/settings.hpp"
 
+#include <CL/cl.h>
 #include <CL/opencl.hpp>
 #include <cstddef>
+#include <array>
 #include <optional>
 
 
@@ -42,17 +27,144 @@ namespace hipsycl {
 namespace rt {
 
 namespace {
+
+// These commonly encountered OpenCL platforms will be silently hidden due to
+// known incompatibilities. The hardware they support is eithers supported via other backends,
+// or not supported at all (e.g. FPGA). All other platforms will be hidden with a warning if
+// they fail feature support queries.
+constexpr std::array incompatible_ocl_platforms = {
+    "NVIDIA CUDA", "Intel(R) FPGA Emulation Platform for OpenCL(TM)",
+    "AMD Accelerated Parallel Processing"};
+
 template<int Query, class ResultT>
 ResultT info_query(const cl::Device& dev) {
   ResultT r{};
   cl_int err = dev.getInfo(Query, &r);
   if(err != CL_SUCCESS) {
     register_error(
-          __hipsycl_here(),
+          __acpp_here(),
           error_info{"ocl_hardware_context: Could not obtain device info",
                     error_code{"CL", err}});
   }
   return r;
+}
+
+template<int Query, class ResultT>
+ResultT platform_info_query(const cl::Device& dev) {
+  cl_platform_id platform = info_query<CL_DEVICE_PLATFORM, cl_platform_id>(dev);
+  cl::Platform p{platform};
+
+  ResultT r{};
+  cl_int err = p.getInfo(Query, &r);
+  if(err != CL_SUCCESS) {
+    register_error(
+          __acpp_here(),
+          error_info{"ocl_hardware_context: Could not obtain platform info",
+                    error_code{"CL", err}});
+  }
+  return r;
+}
+
+bool parse_ocl_version_string(const std::string& s, int& major_version_out) {
+  const std::string identifier = "OpenCL ";
+  const auto pos = s.find(identifier);
+  if(pos != 0)
+    return false;
+  std::string version_substring = s.substr(identifier.length());
+  auto dot_pos = version_substring.find(".");
+  if(dot_pos != std::string::npos) {
+    major_version_out = std::stoi(version_substring.substr(0, dot_pos));
+    return true;
+  }
+
+  return false;
+}
+
+bool should_include_platform(const std::string& platform_name, const cl::Platform& p) {
+  const bool show_all_devices = application::get_settings().get<setting::ocl_show_all_devices>();
+  if(show_all_devices)
+    return true;
+
+  for(const auto& incompatible_platform : incompatible_ocl_platforms) {
+    if(platform_name == incompatible_platform) {
+      HIPSYCL_DEBUG_INFO << "ocl_hardware_manager: Hiding platform '"
+                         << platform_name
+                         << "' because it has known incompatibilities. Set "
+                            "ACPP_RT_OCL_SHOW_ALL_DEVICES=1 to override."
+                         << std::endl;
+      return false;
+    }
+  }
+
+  std::string ocl_version;
+  cl_int err = p.getInfo(CL_PLATFORM_VERSION, &ocl_version);
+  if (err != CL_SUCCESS) {
+    print_warning(__acpp_here(),
+                  error_info{"ocl_hardware_manager: Could not retrieve OpenCL "
+                             "version for platform " +
+                                 platform_name,
+                             error_code{"CL", err}});
+    return false;
+  } else {
+    int ocl_version_major = 0;
+    if (!parse_ocl_version_string(ocl_version, ocl_version_major)) {
+      HIPSYCL_DEBUG_WARNING
+          << "ocl_hardware_manager: Could not parse OpenCL version string "
+              "of platform '"
+          << platform_name
+          << "'; hiding platform. Set ACPP_RT_OCL_SHOW_ALL_DEVICES=1 "
+              "to override. (OpenCL version string was: '"
+          << ocl_version << "')" << std::endl;
+      return false;
+    } else {
+      if (ocl_version_major < 3) {
+        HIPSYCL_DEBUG_WARNING
+            << "ocl_hardware_manager: Platform '"
+            << platform_name
+            << "' does not support OpenCL 3.0; hiding platform. Set "
+               "ACPP_RT_OCL_SHOW_ALL_DEVICES=1 "
+               "to override. (OpenCL version string was: '"
+            << ocl_version << "')" << std::endl;
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool should_include_device(const std::string& dev_name, const cl::Device& dev) {
+  const bool show_all_devices = application::get_settings().get<setting::ocl_show_all_devices>();
+  if(show_all_devices)
+    return true;
+
+  if(info_query<CL_DEVICE_IL_VERSION, std::string>(dev).find("SPIR-V") ==
+           std::string::npos) {
+    HIPSYCL_DEBUG_WARNING
+            << "ocl_hardware_manager: OpenCL device '"
+            << dev_name
+            << "' does not support SPIR-V; hiding device. Set "
+               "ACPP_RT_OCL_SHOW_ALL_DEVICES=1 "
+               "to override." << std::endl;
+    return false;
+  }
+
+  cl_device_svm_capabilities cap =
+      info_query<CL_DEVICE_SVM_CAPABILITIES, cl_device_svm_capabilities>(dev);
+
+  bool has_usm_extension = info_query<CL_DEVICE_EXTENSIONS, std::string>(dev).find("cl_intel_unified_shared_memory") != std::string::npos;
+  bool has_system_svm = cap & CL_DEVICE_SVM_FINE_GRAIN_SYSTEM;
+
+  if(!has_usm_extension && !has_system_svm) {
+    HIPSYCL_DEBUG_WARNING << "ocl_hardware_manager: OpenCL device '" << dev_name
+                          << "' does not support USM extensions or system SVM. "
+                             "Allocations are not possible; hiding device. Set "
+                             "ACPP_RT_OCL_SHOW_ALL_DEVICES=1 "
+                             "to override."
+                          << std::endl;
+    return false;
+  }
+
+  return true;
 }
 
 }
@@ -60,7 +172,14 @@ ResultT info_query(const cl::Device& dev) {
 ocl_hardware_context::ocl_hardware_context(const cl::Device &dev,
                                            const cl::Context &ctx, int dev_id,
                                            int platform_id)
-    : _dev_id{dev_id}, _platform_id{platform_id}, _ctx{ctx}, _dev{dev} {}
+    : _dev_id{dev_id}, _platform_id{platform_id}, _ctx{ctx}, _dev{dev},
+      _alloc{}, _has_intel_extension_profile{false} {
+  std::string platform_name =
+      platform_info_query<CL_PLATFORM_NAME, std::string>(_dev);
+
+  if(platform_name == "Intel(R) OpenCL Graphics" || platform_name == "Intel(R) OpenCL")
+    _has_intel_extension_profile = true;
+}
 
 bool ocl_hardware_context::is_cpu() const {
   return info_query<CL_DEVICE_TYPE, cl_device_type>(_dev) & CL_DEVICE_TYPE_CPU;
@@ -88,6 +207,10 @@ std::string ocl_hardware_context::get_vendor_name() const {
 
 std::string ocl_hardware_context::get_device_arch() const {
   return "OpenCL " + info_query<CL_DEVICE_OPENCL_C_VERSION, std::string>(_dev);
+}
+
+bool ocl_hardware_context::has_intel_extension_profile() const {
+  return _has_intel_extension_profile;
 }
 
 bool ocl_hardware_context::has(device_support_aspect aspect) const {
@@ -143,7 +266,7 @@ bool ocl_hardware_context::has(device_support_aspect aspect) const {
     return this->_usm_provider->has_usm_system_allocations();
     break;
   case device_support_aspect::execution_timestamps:
-    return true;
+    return false;
     break;
   case device_support_aspect::sscp_kernels:
 #ifdef HIPSYCL_WITH_SSCP_COMPILER
@@ -152,6 +275,9 @@ bool ocl_hardware_context::has(device_support_aspect aspect) const {
 #else
     return false;
 #endif
+    break;
+  case device_support_aspect::work_item_independent_forward_progress:
+    return false;
     break;
   }
   assert(false && "Unknown device aspect");
@@ -343,6 +469,13 @@ std::size_t ocl_hardware_context::get_property(device_uint_property prop) const 
     return static_cast<std::size_t>(
         info_query<CL_DEVICE_VENDOR_ID, cl_uint>(_dev));
     break;
+  case device_uint_property::architecture:
+    // TODO
+    return 0;
+    break;
+  case device_uint_property::backend_id:
+    return static_cast<int>(backend_id::ocl);
+    break;
   }
   assert(false && "Invalid device property");
   std::terminate();
@@ -353,13 +486,29 @@ ocl_hardware_context::get_property(device_uint_list_property prop) const {
   switch (prop) {
   case device_uint_list_property::sub_group_sizes:
     // TODO - there does not seem to be a direct query for this.
-    // The current implementation is a hack and might not return
-    // all possible subgroup sizes.
+    // So we return all power of two values between 1 and
+    // the max workgroup size. The latter corresponds to the case when there is
+    // only a single subgroup for the whole work group.
+    // Unfortunately there does not seem to be a good way to get a min bound.
+    //
+    // This is a heuristic that returns all possible subgroup sizes, but may
+    // also return values that are not actually possible as subgroups.
     std::size_t max_num_sub_groups =
         get_property(device_uint_property::max_num_sub_groups);
-    return std::vector<std::size_t>{
-        get_property(device_uint_property::max_group_size) /
-        max_num_sub_groups};
+    std::size_t max_group_size =
+        get_property(device_uint_property::max_group_size);
+    
+    auto min_bound = 1;
+    auto max_bound = std::max(max_num_sub_groups, max_group_size);
+
+    std::vector<std::size_t> result;
+
+    for(std::size_t i = 1; i < max_bound; i *= 2) {
+      if(i >= min_bound)
+        result.push_back(i);
+    }
+
+    return result;
     break;
   }
   assert(false && "Invalid device property");
@@ -419,7 +568,18 @@ void ocl_hardware_context::init_allocator(ocl_hardware_manager *mgr) {
                              "allocations are not possible on that device."
                           << std::endl;
   }
-  _alloc = ocl_allocator{_usm_provider.get()};
+  device_id dev{
+      backend_descriptor{hardware_platform::ocl, api_platform::ocl},
+      _dev_id};
+  _alloc = ocl_allocator{dev, _usm_provider.get()};
+}
+
+std::size_t ocl_hardware_context::get_platform_index() const {
+  return static_cast<std::size_t>(_platform_id);
+}
+
+std::size_t ocl_hardware_manager::get_num_platforms() const {
+  return _platforms.size();
 }
 
 ocl_hardware_manager::ocl_hardware_manager()
@@ -433,7 +593,7 @@ ocl_hardware_manager::ocl_hardware_manager()
   cl_int err = cl::Platform::get(&platforms);
   if(err != CL_SUCCESS) {
     print_warning(
-          __hipsycl_here(),
+          __acpp_here(),
           error_info{"ocl_hardware_manager: Could not obtain platform list",
                     error_code{"CL", err}});
     platforms.clear();
@@ -441,92 +601,106 @@ ocl_hardware_manager::ocl_hardware_manager()
 
   int global_device_index = 0;
   for(const auto& p : platforms) {
+    
     std::string platform_name;
-    if(p.getInfo(CL_PLATFORM_NAME, &platform_name) == CL_SUCCESS) {
-      HIPSYCL_DEBUG_INFO << "ocl_hardware_manager: Discovered OpenCL platform " << platform_name
-                         << std::endl;
-    }
-    _platforms.push_back(p);
-    int platform_id = _platforms.size() - 1;
-
-    std::vector<cl::Device> devs;
-    // CL param validation layer does not like CL_DEVICE_TYPE_ALL here
-    err = p.getDevices(CL_DEVICE_TYPE_CPU | CL_DEVICE_TYPE_GPU |
-                           CL_DEVICE_TYPE_ACCELERATOR,
-                       &devs);
+    err = p.getInfo(CL_PLATFORM_NAME, &platform_name);
     if(err != CL_SUCCESS) {
       print_warning(
-          __hipsycl_here(),
-          error_info{"ocl_hardware_manager: Could not list devices of platform",
+          __acpp_here(),
+          error_info{"ocl_hardware_manager: Could not retrieve platform name",
                     error_code{"CL", err}});
-    } else {
-      cl_platform_id pid = p.cl::detail::Wrapper<cl_platform_id>::get();
-
-      std::optional<cl::Context> platform_ctx;
-
-      if(!no_shared_contexts) {
-        // First attempt to create shared context
-        cl_context_properties ctx_props[] = {CL_CONTEXT_PLATFORM,
-                                            (cl_context_properties)pid, 0};
-        cl::Context ctx{devs, ctx_props, nullptr, nullptr, &err};
-        if(err == CL_SUCCESS)
-          platform_ctx = ctx;
-        else {
-          print_warning(
-              __hipsycl_here(),
-              error_info{"ocl_hardware_manager: Shared context construction "
-                        "failed. Will attempt to fall back to individual "
-                        "context per device, but this may prevent data "
-                        "transfers between devices from working.",
-                        error_code{"CL", err}});
-        }
-      } else {
-        print_warning(
-            __hipsycl_here(),
-            error_info{"ocl_hardware_manager: Not constructing shared context "
-                       "across devices. Note that this may prevent data "
-                       "transfers between devices from working."});
-      }
-
-      int platform_device_index = 0;
-      for(const auto& dev : devs) {
-        std::optional<cl::Context> chosen_context = platform_ctx;
-
-        if(!chosen_context.has_value()) {
-          // If we don't have a shared context yet, try creating
-          // an individual context for the device.
-          cl::Context ctx{dev, nullptr, nullptr, nullptr, &err};
-          if(err == CL_SUCCESS)
-            chosen_context = ctx;
-          else {
-            print_error(
-                __hipsycl_here(),
-                error_info{
-                    "ocl_hardware_manager: Individual context creation failed",
-                    error_code{"CL", err}});
-          } 
-        }
-        if(chosen_context.has_value()) {
-          ocl_hardware_context hw_ctx{dev, chosen_context.value(),
-                                      static_cast<int>(_devices.size()),
-                                      platform_id};
-
-          if (device_matches(visibility_mask, backend_id::ocl,
-                            global_device_index, platform_device_index,
-                            platform_id, hw_ctx.get_device_name(),
-                            platform_name)) {
-            _devices.push_back(hw_ctx);
-            // Allocator can only be initialized once the hardware context
-            // is in the list, because the allocator may itself attempt to access
-            // it using hardware_manager::get_device()
-            _devices.back().init_allocator(this);
-          }
-        }
-        ++global_device_index;
-        ++platform_device_index;
-      }
     }
 
+    if(should_include_platform(platform_name, p)) {
+      HIPSYCL_DEBUG_INFO << "ocl_hardware_manager: Discovered OpenCL platform "
+                         << platform_name << std::endl;
+
+      _platforms.push_back(p);
+      int platform_id = _platforms.size() - 1;
+
+      std::vector<cl::Device> devs;
+      // CL param validation layer does not like CL_DEVICE_TYPE_ALL here
+      err = p.getDevices(CL_DEVICE_TYPE_CPU | CL_DEVICE_TYPE_GPU |
+                             CL_DEVICE_TYPE_ACCELERATOR,
+                         &devs);
+      if (err != CL_SUCCESS) {
+        print_warning(
+            __acpp_here(),
+            error_info{
+                "ocl_hardware_manager: Could not list devices of platform",
+                error_code{"CL", err}});
+      } else {
+        cl_platform_id pid = p.cl::detail::Wrapper<cl_platform_id>::get();
+
+        std::optional<cl::Context> platform_ctx;
+
+        if (!no_shared_contexts) {
+          // First attempt to create shared context
+          cl_context_properties ctx_props[] = {CL_CONTEXT_PLATFORM,
+                                               (cl_context_properties)pid, 0};
+          cl::Context ctx{devs, ctx_props, nullptr, nullptr, &err};
+          if (err == CL_SUCCESS)
+            platform_ctx = ctx;
+          else {
+            print_warning(
+                __acpp_here(),
+                error_info{"ocl_hardware_manager: Shared context construction "
+                           "failed. Will attempt to fall back to individual "
+                           "context per device, but this may prevent data "
+                           "transfers between devices from working.",
+                           error_code{"CL", err}});
+          }
+        } else {
+          print_warning(
+              __acpp_here(),
+              error_info{
+                  "ocl_hardware_manager: Not constructing shared context "
+                  "across devices. Note that this may prevent data "
+                  "transfers between devices from working."});
+        }
+
+        int platform_device_index = 0;
+        for (const auto &dev : devs) {
+          std::string dev_name = info_query<CL_DEVICE_NAME, std::string>(dev);
+          if(should_include_device(dev_name, dev)) {
+
+            std::optional<cl::Context> chosen_context = platform_ctx;
+
+            if (!chosen_context.has_value()) {
+              // If we don't have a shared context yet, try creating
+              // an individual context for the device.
+              cl::Context ctx{dev, nullptr, nullptr, nullptr, &err};
+              if (err == CL_SUCCESS)
+                chosen_context = ctx;
+              else {
+                print_error(__acpp_here(),
+                            error_info{"ocl_hardware_manager: Individual context "
+                                      "creation failed",
+                                      error_code{"CL", err}});
+              }
+            }
+            if (chosen_context.has_value()) {
+              ocl_hardware_context hw_ctx{dev, chosen_context.value(),
+                                          static_cast<int>(_devices.size()),
+                                          platform_id};
+
+              if (device_matches(visibility_mask, backend_id::ocl,
+                                global_device_index, platform_device_index,
+                                platform_id, hw_ctx.get_device_name(),
+                                platform_name)) {
+                _devices.push_back(hw_ctx);
+                // Allocator can only be initialized once the hardware context
+                // is in the list, because the allocator may itself attempt to
+                // access it using hardware_manager::get_device()
+                _devices.back().init_allocator(this);
+              }
+            }
+            ++global_device_index;
+            ++platform_device_index;
+          }
+        }
+      }
+    }
   }
 }
 

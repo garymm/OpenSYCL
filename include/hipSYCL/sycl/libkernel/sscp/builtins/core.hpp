@@ -1,51 +1,96 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018-2022 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_SSCP_BUILTINS_CORE_HPP
 #define HIPSYCL_SSCP_BUILTINS_CORE_HPP
 
 #include "builtin_config.hpp"
+#include "core_typed.hpp"
 
 #include <stddef.h>
 
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_local_id_x();
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_local_id_y();
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_local_id_z();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_local_id_x();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_local_id_y();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_local_id_z();
 
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_group_id_x();
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_group_id_y();
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_group_id_z();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_group_id_x();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_group_id_y();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_group_id_z();
 
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_local_size_x();
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_local_size_y();
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_local_size_z();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_local_size_x();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_local_size_y();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_local_size_z();
 
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_num_groups_x();
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_num_groups_y();
-HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_get_num_groups_z();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_num_groups_x();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_num_groups_y();
+HIPSYCL_SSCP_BUILTIN __acpp_uint64 __acpp_sscp_get_num_groups_z();
+
+// This is used to implement the optimization in llvm-to-backend to treat
+// all queries as fitting into int.
+// The implementation is provided by the compiler and does not need to be implemented
+// by backends.
+HIPSYCL_SSCP_BUILTIN bool
+__acpp_sscp_if_global_sizes_fit_in_int();
+
+template<int Dim>
+size_t __acpp_sscp_get_global_linear_id() {
+  if(__acpp_sscp_if_global_sizes_fit_in_int()) {
+    return __acpp_sscp_typed_get_global_linear_id<Dim, int>();
+  } else {
+    return __acpp_sscp_typed_get_global_linear_id<Dim, size_t>();
+  }
+}
+
+template<int Dim>
+size_t __acpp_sscp_get_group_linear_id() {
+  if(__acpp_sscp_if_global_sizes_fit_in_int()) {
+    return __acpp_sscp_typed_get_group_linear_id<Dim, int>();
+  } else {
+    return __acpp_sscp_typed_get_group_linear_id<Dim, size_t>();
+  }
+}
+
+template<int Dim>
+size_t __acpp_sscp_get_local_linear_id() {
+  if(__acpp_sscp_if_global_sizes_fit_in_int()) {
+    return __acpp_sscp_typed_get_local_linear_id<Dim, int>();
+  } else {
+    return __acpp_sscp_typed_get_local_linear_id<Dim, size_t>();
+  }
+}
+
+template<int Dim>
+size_t __acpp_sscp_get_global_size() {
+  if(__acpp_sscp_if_global_sizes_fit_in_int()) {
+    return __acpp_sscp_typed_get_global_size<Dim, int>();
+  } else {
+    return __acpp_sscp_typed_get_global_size<Dim, size_t>();
+  }
+}
+
+template<int Dim>
+size_t __acpp_sscp_get_local_size() {
+  if(__acpp_sscp_if_global_sizes_fit_in_int()) {
+    return __acpp_sscp_typed_get_local_size<Dim, int>();
+  } else {
+    return __acpp_sscp_typed_get_local_size<Dim, size_t>();
+  }
+}
+
+template<int Dim>
+size_t __acpp_sscp_get_num_groups() {
+  if(__acpp_sscp_if_global_sizes_fit_in_int()) {
+    return __acpp_sscp_typed_get_num_groups<Dim, int>();
+  } else {
+    return __acpp_sscp_typed_get_num_groups<Dim, size_t>();
+  }
+}
 
 #endif

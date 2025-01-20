@@ -1,32 +1,17 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/sscp/AggregateArgumentExpansionPass.hpp"
+
+#include "hipSYCL/compiler/cbs/IRUtils.hpp"
+#include "hipSYCL/compiler/utils/AggregateTypeUtils.hpp"
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/MapVector.h>
@@ -43,31 +28,6 @@ namespace compiler {
 
 namespace {
 
-template <class F>
-void ForEachNonAggregateContainedType(llvm::Type *T, F &&Handler,
-                                      llvm::SmallVector<int, 16> CurrentIndices) {
-  if(!T)
-    return;
-  
-  if(T->isArrayTy()) {
-    llvm::Type* ArrayElementT = T->getArrayElementType();
-    for(int i = 0; i < T->getArrayNumElements(); ++i) {
-      auto NextIndices = CurrentIndices;
-      NextIndices.push_back(i);
-      ForEachNonAggregateContainedType(ArrayElementT, Handler, NextIndices);
-    }
-  } else if(T->isAggregateType()) {
-    for(int i = 0; i < T->getNumContainedTypes(); ++i) {
-      auto NextIndices = CurrentIndices;
-      NextIndices.push_back(i);
-      llvm::Type* SubType = T->getContainedType(i);
-
-      ForEachNonAggregateContainedType(SubType, Handler, NextIndices);   
-    }
-  } else {
-    Handler(T, CurrentIndices);
-  }
-}
 
 llvm::Type* getValueType(llvm::Function& F, int ArgNo) {
   llvm::Type* ArgT = F.getFunctionType()->getParamType(ArgNo);
@@ -96,12 +56,35 @@ struct ExpandedArgumentInfo {
   // arg
   llvm::SmallVector<llvm::SmallVector<int, 16>> GEPIndices;
   llvm::SmallVector<llvm::Type*> ExpandedTypes;
+  llvm::SmallVector<llvm::SmallVector<std::string>> TypeAnnotations;
   // original argument index
   int OriginalIndex = 0;
   // Number of arguments the original arg was expanded into
   int NumExpandedArguments = 1;
   bool IsExpanded = false;
 };
+
+static const char* TypeAnnotationIdentifier = "__acpp_sscp_emit_param_type_annotation";
+
+std::string ExtractAnnotationFromType(llvm::Type* T) {
+  if(!T)
+    return {};
+  
+  std::string StructName = T->getStructName().str();
+
+  std::size_t pos = StructName.find(TypeAnnotationIdentifier);
+  if(pos == std::string::npos)
+    return {};
+
+  std::string Substr = StructName.substr(pos);
+  std::string AnnotationType = Substr.substr(0, Substr.find_first_of(":."));
+
+  std::string Prefix = TypeAnnotationIdentifier;
+  Prefix += "_";
+  auto Result = AnnotationType.substr(Prefix.size());
+
+  return Result;
+}
 
 void ExpandAggregateArguments(llvm::Module &M, llvm::Function &F,
                               std::vector<OriginalParamInfo> &OriginalParamInfos) {
@@ -118,13 +101,34 @@ void ExpandAggregateArguments(llvm::Module &M, llvm::Function &F,
     if (needsExpansion(F, i)) {
       Info.IsExpanded = true;
 
-      auto OnContainedType = [&](llvm::Type *T, llvm::SmallVector<int, 16> Indices) {
+      auto OnContainedType = [&](llvm::Type *T, llvm::SmallVector<int, 16> Indices,
+                                 llvm::SmallVector<llvm::Type *, 16> MatchedParentTypes) {
         Info.ExpandedTypes.push_back(T);
         Info.GEPIndices.push_back(Indices);
+        
+        llvm::SmallVector<std::string> Annotations;
+        for(llvm::Type* MatchedType : MatchedParentTypes) {
+          std::string Annotation = ExtractAnnotationFromType(MatchedType);
+          if(!Annotation.empty()) {
+            if (std::find(Annotations.begin(), Annotations.end(), Annotation) == Annotations.end()) {
+              Annotations.push_back(Annotation);
+            }
+          }
+        }
+
+        Info.TypeAnnotations.push_back(Annotations);
+      };
+
+      auto ParentTypeMatcher = [&](llvm::Type* T) {
+        if(T && T->isStructTy())
+          if(T->getStructName().find(TypeAnnotationIdentifier))
+            return true;
+        return false;
       };
 
       auto* ValueT = getValueType(F, i);
-      ForEachNonAggregateContainedType(ValueT, OnContainedType, {});
+      utils::ForEachNonAggregateContainedTypeWithParentTypeMatcher(ValueT, OnContainedType, {}, {},
+                                                                   ParentTypeMatcher);
       Info.OriginalByValType = ValueT;
       Info.NumExpandedArguments = Info.GEPIndices.size();
     } else {
@@ -145,7 +149,7 @@ void ExpandAggregateArguments(llvm::Module &M, llvm::Function &F,
       NewArgumentTypes.push_back(EI.OriginalByValType);
     }
   }
-  
+
   std::string FunctionName = F.getName().str();
   F.setName(FunctionName + "_PreArgumentExpansion");
   auto OldLinkage = F.getLinkage();
@@ -158,6 +162,15 @@ void ExpandAggregateArguments(llvm::Module &M, llvm::Function &F,
       NewF->addFnAttr(Attr);
     }
     NewF->setLinkage(OldLinkage);
+
+    if (auto Annotations = M.getNamedMetadata(SscpAnnotationsName)) {
+      for (auto *MD : Annotations->operands()) {
+        if (&F == llvm::cast<llvm::Function>(
+                      llvm::cast<llvm::ValueAsMetadata>(MD->getOperand(0))->getValue())) {
+          MD->replaceOperandWith(0, llvm::ValueAsMetadata::get(NewF));
+        }
+      }
+    }
 
     llvm::BasicBlock *BB =
           llvm::BasicBlock::Create(M.getContext(), "", NewF);
@@ -187,22 +200,22 @@ void ExpandAggregateArguments(llvm::Module &M, llvm::Function &F,
               EI.OriginalByValType, Alloca, llvm::ArrayRef<llvm::Value *>{GEPIndicesRef}, "", BB);
           // Store expanded argument into allocated space
           assert(CurrentNewIndex + j < NewF->getFunctionType()->getNumParams());
-          
+
           auto *StoredVal = NewF->getArg(CurrentNewIndex + j);
-          auto *StoreInst = new llvm::StoreInst(StoredVal, GEPInst, BB);
+          [[maybe_unused]] auto *StoreInst = new llvm::StoreInst(StoredVal, GEPInst, BB);
 
           // Store the indexed offset - runtimes can use this information later
           // when invoking the function.
           std::size_t IndexedOffset = M.getDataLayout().getIndexedOffsetInType(
               EI.OriginalByValType, GEPIndicesRef);
-          OriginalParamInfos.push_back(
-              OriginalParamInfo{IndexedOffset, static_cast<std::size_t>(EI.OriginalIndex)});
+          OriginalParamInfos.push_back(OriginalParamInfo{
+              IndexedOffset, static_cast<std::size_t>(EI.OriginalIndex), EI.TypeAnnotations[j]});
         }
         CallArgs.push_back(Alloca);
       } else {
         CallArgs.push_back(NewF->getArg(CurrentNewIndex));
-        OriginalParamInfos.push_back(
-            OriginalParamInfo{0, static_cast<std::size_t>(EI.OriginalIndex)});
+        OriginalParamInfos.push_back(OriginalParamInfo{
+            0, static_cast<std::size_t>(EI.OriginalIndex), EI.TypeAnnotations[0]});
       }
 
       CurrentNewIndex += EI.NumExpandedArguments;

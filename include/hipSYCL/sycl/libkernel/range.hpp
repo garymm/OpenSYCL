@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_RANGE_HPP
 #define HIPSYCL_RANGE_HPP
 
@@ -45,7 +27,7 @@ class range {
 public:
   static constexpr int dimensions = Dimensions;
 
-  HIPSYCL_UNIVERSAL_TARGET
+  ACPP_UNIVERSAL_TARGET
   range()
     : _data{}
   {}
@@ -54,7 +36,7 @@ public:
 Dimensions==1 */
   template<int D = Dimensions,
            typename = std::enable_if_t<D == 1>>
-  HIPSYCL_UNIVERSAL_TARGET
+  ACPP_UNIVERSAL_TARGET
   range(size_t dim0)
     : _data{dim0}
   {}
@@ -63,7 +45,7 @@ Dimensions==1 */
 Dimensions==2 */
   template<int D = Dimensions,
            typename = std::enable_if_t<D == 2>>
-  HIPSYCL_UNIVERSAL_TARGET
+  ACPP_UNIVERSAL_TARGET
   range(size_t dim0, size_t dim1)
     : _data{dim0, dim1}
   {}
@@ -72,7 +54,7 @@ Dimensions==2 */
 Dimensions==3 */
   template<int D = Dimensions,
            typename = std::enable_if_t<D == 3>>
-  HIPSYCL_UNIVERSAL_TARGET
+  ACPP_UNIVERSAL_TARGET
   range(size_t dim0, size_t dim1, size_t dim2)
     : _data{dim0, dim1, dim2}
   {}
@@ -87,22 +69,22 @@ Dimensions==3 */
     return !(lhs == rhs);
   }
 
-  HIPSYCL_UNIVERSAL_TARGET
+  ACPP_UNIVERSAL_TARGET
   size_t get(int dimension) const {
     return _data[dimension];
   }
 
-  HIPSYCL_UNIVERSAL_TARGET
+  ACPP_UNIVERSAL_TARGET
   size_t &operator[](int dimension) {
     return _data[dimension];
   }
 
-  HIPSYCL_UNIVERSAL_TARGET
+  ACPP_UNIVERSAL_TARGET
   size_t operator[](int dimension) const {
     return _data[dimension];
   }
 
-  HIPSYCL_UNIVERSAL_TARGET
+  ACPP_UNIVERSAL_TARGET
   size_t size() const {
     // loop peel to help uniformity analysis
     size_t result = _data[0];
@@ -114,7 +96,7 @@ Dimensions==3 */
   // Implementation of id<Dimensions> operatorOP(const size_t &rhs) const;
   // OP is: +, -, *, /, %, <<, >>, &, |, ˆ, &&, ||, <, >, <=, >=
 #define HIPSYCL_RANGE_BINARY_OP_OUT_OF_PLACE(op) \
-  HIPSYCL_UNIVERSAL_TARGET \
+  ACPP_UNIVERSAL_TARGET \
   friend range<Dimensions> operator op(const range<Dimensions> &lhs, \
                                        const range<Dimensions> &rhs) { \
     /* loop peel to help uniformity analysis */ \
@@ -143,7 +125,7 @@ Dimensions==3 */
   HIPSYCL_RANGE_BINARY_OP_OUT_OF_PLACE(>=)
 
 #define HIPSYCL_RANGE_BINARY_OP_OUT_OF_PLACE_SIZE_T(op) \
-  HIPSYCL_UNIVERSAL_TARGET \
+  ACPP_UNIVERSAL_TARGET \
   friend range<Dimensions> operator op(const range<Dimensions> &lhs, \
                                        const std::size_t &rhs) { \
     /* loop peel to help uniformity analysis */ \
@@ -175,7 +157,7 @@ Dimensions==3 */
   // Implementation of id<Dimensions> &operatorOP(const id<Dimensions> &rhs);
   // OP is: +=, -=, *=, /=, %=, <<=, >>=, &=, |=, ˆ=
 #define HIPSYCL_RANGE_BINARY_OP_IN_PLACE(op) \
-  HIPSYCL_UNIVERSAL_TARGET \
+  ACPP_UNIVERSAL_TARGET \
   friend range<Dimensions>& operator op(range<Dimensions> &lhs, \
                                  const range<Dimensions> &rhs) { \
     /* loop peel to help uniformity analysis */ \
@@ -197,7 +179,7 @@ Dimensions==3 */
   HIPSYCL_RANGE_BINARY_OP_IN_PLACE(^=)
 
 #define HIPSYCL_RANGE_BINARY_OP_IN_PLACE_SIZE_T(op) \
-  HIPSYCL_UNIVERSAL_TARGET \
+  ACPP_UNIVERSAL_TARGET \
   friend range<Dimensions>& operator op(range<Dimensions> &lhs, const std::size_t &rhs) { \
     /* loop peel to help uniformity analysis */ \
     lhs._data[0] op rhs; \
@@ -219,7 +201,7 @@ Dimensions==3 */
 
 
   #define HIPSYCL_RANGE_BINARY_OP_SIZE_T(op) \
-  HIPSYCL_UNIVERSAL_TARGET \
+  ACPP_UNIVERSAL_TARGET \
   friend range<Dimensions> operator op(const std::size_t &lhs, const range<Dimensions> &rhs) { \
     /* loop peel to help uniformity analysis */ \
     range<Dimensions> result; \
@@ -293,20 +275,20 @@ range(size_t, size_t, size_t) -> range<3>;
 namespace detail {
 namespace range {
 
-HIPSYCL_UNIVERSAL_TARGET
+ACPP_UNIVERSAL_TARGET
 inline sycl::range<2> omit_first_dimension(const sycl::range<3>& r)
 {
   return sycl::range<2>{r.get(1), r.get(2)};
 }
 
-HIPSYCL_UNIVERSAL_TARGET
+ACPP_UNIVERSAL_TARGET
 inline sycl::range<1> omit_first_dimension(const sycl::range<2>& r)
 {
   return sycl::range<1>{r.get(1)};
 }
 
 template <int dimsOut, int dimsIn>
-HIPSYCL_UNIVERSAL_TARGET
+ACPP_UNIVERSAL_TARGET
 sycl::range<dimsOut> range_cast(const sycl::range<dimsIn>& other)
 {
   sycl::range<dimsOut> result;

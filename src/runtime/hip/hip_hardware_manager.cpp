@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/runtime/hip/hip_hardware_manager.hpp"
 #include "hipSYCL/runtime/hardware.hpp"
 #include "hipSYCL/runtime/hip/hip_event_pool.hpp"
@@ -34,9 +17,36 @@
 #include <exception>
 #include <cstdlib>
 #include <limits>
+#include <cctype>
 
 namespace hipsycl {
 namespace rt {
+
+namespace {
+
+
+int device_arch_string_to_int(const std::string& device_name) {
+  std::string prefix = "gfx";
+  
+  if(device_name.find(prefix) != 0)
+    return 0;
+  
+  std::string substr = device_name;
+  substr.erase(0, prefix.length());
+
+  auto colon_pos = substr.find(":");
+  if(colon_pos != std::string::npos) {
+    substr.erase(colon_pos);
+  }
+
+  for(int i = 0; i < substr.length(); ++i) {
+    if(!std::isxdigit(substr[i]))
+      return 0;
+  }
+  return std::stoi(substr, nullptr, 16);
+}
+
+}
 
 hip_hardware_manager::hip_hardware_manager(hardware_platform hw_platform)
     : _hw_platform(hw_platform) {
@@ -45,7 +55,7 @@ hip_hardware_manager::hip_hardware_manager(hardware_platform hw_platform)
           application::get_settings().get<setting::visibility_mask>(),
           backend_id::hip)) {
     print_warning(
-        __hipsycl_here(),
+        __acpp_here(),
         error_info{
             "hip_hardware_manager: HIP backend does not support device "
             "visibility masks. Use HIP_VISIBILE_DEVICES instead."});
@@ -59,7 +69,7 @@ hip_hardware_manager::hip_hardware_manager(hardware_platform hw_platform)
 
     if(err != hipErrorNoDevice){
       print_warning(
-          __hipsycl_here(),
+          __acpp_here(),
           error_info{"hip_hardware_manager: Could not obtain number of devices",
                     error_code{"HIP", err}});
     }
@@ -78,7 +88,7 @@ std::size_t hip_hardware_manager::get_num_devices() const {
 
 hardware_context *hip_hardware_manager::get_device(std::size_t index) {
   if (index >= _devices.size()){
-    register_error(__hipsycl_here(),
+    register_error(__acpp_here(),
                    error_info{"hip_hardware_manager: Attempt to access invalid "
                               "device detected."});
     return nullptr;
@@ -89,7 +99,7 @@ hardware_context *hip_hardware_manager::get_device(std::size_t index) {
 
 device_id hip_hardware_manager::get_device_id(std::size_t index) const {
   if (index >= _devices.size()){
-    register_error(__hipsycl_here(),
+    register_error(__acpp_here(),
                    error_info{"hip_hardware_manager: Attempt to access invalid "
                               "device detected."});
   }
@@ -98,6 +108,13 @@ device_id hip_hardware_manager::get_device_id(std::size_t index) const {
                    static_cast<int>(index)};
 }
 
+std::size_t hip_hardware_manager::get_num_platforms() const {
+  return 1;
+}
+
+std::size_t hip_hardware_context::get_platform_index() const {
+  return 0;
+}
 
 hip_hardware_context::hip_hardware_context(int dev) : _dev{dev} {
   _properties = std::make_unique<hipDeviceProp_t>();
@@ -106,7 +123,7 @@ hip_hardware_context::hip_hardware_context(int dev) : _dev{dev} {
 
   if (err != hipSuccess) {
     register_error(
-        __hipsycl_here(),
+        __acpp_here(),
         error_info{"hip_hardware_manager: Could not query device properties ",
                    error_code{"HIP", err}});
   }
@@ -114,6 +131,8 @@ hip_hardware_context::hip_hardware_context(int dev) : _dev{dev} {
   _allocator = std::make_unique<hip_allocator>(
       backend_descriptor{hardware_platform::rocm, api_platform::hip}, _dev);
   _event_pool = std::make_unique<hip_event_pool>(_dev);
+
+  _numeric_architecture = device_arch_string_to_int(get_device_arch());
 }
 
 hip_allocator* hip_hardware_context::get_allocator() const {
@@ -224,6 +243,9 @@ bool hip_hardware_context::has(device_support_aspect aspect) const {
 #else
     return false;
 #endif
+    break;
+  case device_support_aspect::work_item_independent_forward_progress:
+    return false;
     break;
   }
   assert(false && "Unknown device aspect");
@@ -380,6 +402,11 @@ hip_hardware_context::get_property(device_uint_property prop) const {
   case device_uint_property::vendor_id:
     return 1022;
     break;
+  case device_uint_property::architecture:
+    return _numeric_architecture;
+  case device_uint_property::backend_id:
+    return static_cast<int>(backend_id::hip);
+    break;
   }
   assert(false && "Invalid device property");
   std::terminate();
@@ -403,7 +430,7 @@ std::string hip_hardware_context::get_driver_version() const {
   auto err = hipDriverGetVersion(&driver_version);
   if (err != hipSuccess) {
     register_error(
-        __hipsycl_here(),
+        __acpp_here(),
         error_info{"hip_hardware_manager: Querying driver version failed",
                    error_code{"HIP", err}});
   }

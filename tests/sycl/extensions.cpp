@@ -1,29 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018-2021 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 
 
 #include "hipSYCL/sycl/access.hpp"
@@ -43,7 +27,7 @@
 
 BOOST_FIXTURE_TEST_SUITE(extension_tests, reset_device_fixture)
 
-#ifdef HIPSYCL_EXT_AUTO_PLACEHOLDER_REQUIRE
+#ifdef ACPP_EXT_AUTO_PLACEHOLDER_REQUIRE
 BOOST_AUTO_TEST_CASE(auto_placeholder_require_extension) {
   namespace s = cl::sycl;
 
@@ -102,7 +86,8 @@ BOOST_AUTO_TEST_CASE(auto_placeholder_require_extension) {
   }
 }
 #endif
-#ifdef HIPSYCL_EXT_CUSTOM_PFWI_SYNCHRONIZATION
+#if defined(ACPP_EXT_CUSTOM_PFWI_SYNCHRONIZATION) &&                           \
+    !defined(__ACPP_ENABLE_LLVM_SSCP_TARGET__)
 BOOST_AUTO_TEST_CASE(custom_pfwi_synchronization_extension) {
   namespace sync = cl::sycl::vendor::hipsycl::synchronization;
 
@@ -170,8 +155,11 @@ BOOST_AUTO_TEST_CASE(custom_pfwi_synchronization_extension) {
   }
 }
 #endif
-#if defined(HIPSYCL_EXT_SCOPED_PARALLELISM_V2) &&                              \
-    !defined(HIPSYCL_LIBKERNEL_CUDA_NVCXX) // nvc++ currently crashed with sp code
+
+#if defined(ACPP_EXT_SCOPED_PARALLELISM_V2) &&                                 \
+    !defined(                                                                  \
+        ACPP_LIBKERNEL_CUDA_NVCXX) && /*nvc++ currently crashed with sp code*/ \
+    !defined(__ACPP_ENABLE_LLVM_SSCP_TARGET__)
 
 template<class KernelName, int N>
 class enumerated_kernel_name;
@@ -428,7 +416,7 @@ BOOST_AUTO_TEST_CASE(scoped_parallelism_odd_group_size) {
 }
 
 #endif
-#ifdef HIPSYCL_EXT_ENQUEUE_CUSTOM_OPERATION
+#ifdef ACPP_EXT_ENQUEUE_CUSTOM_OPERATION
 
 template<cl::sycl::backend B>
 void test_interop(cl::sycl::queue& q) {
@@ -445,7 +433,7 @@ void test_interop(cl::sycl::queue& q) {
   q.submit([&](sycl::handler &cgh) {
     auto acc = buff.get_access<sycl::access::mode::read>(cgh);
 
-    cgh.hipSYCL_enqueue_custom_operation([=](sycl::interop_handle &h) {
+    cgh.AdaptiveCpp_enqueue_custom_operation([=](sycl::interop_handle &h) {
       // All backends support obtaining native memory
       void *native_mem = h.get_native_mem<B>(acc);
 
@@ -459,7 +447,7 @@ void test_interop(cl::sycl::queue& q) {
         // Even though we can target multiple backends simultaneously,
         // the HIP headers cannot be included simultaneously with CUDA.
         // We can therefore only directly call either CUDA or HIP runtime functions.
-#if HIPSYCL_LIBKERNEL_COMPILER_SUPPORTS_CUDA
+#if ACPP_LIBKERNEL_COMPILER_SUPPORTS_CUDA
         cudaMemcpyAsync(target_ptr, native_mem, test_size * sizeof(int),
                         cudaMemcpyDeviceToHost, stream);
 #endif
@@ -471,7 +459,7 @@ void test_interop(cl::sycl::queue& q) {
         typename sycl::backend_traits<B>::template native_type<sycl::device> dev =
             h.get_native_device<B>();
         
-#if HIPSYCL_LIBKERNEL_COMPILER_SUPPORTS_HIP
+#if ACPP_LIBKERNEL_COMPILER_SUPPORTS_HIP
         hipMemcpyAsync(target_ptr, native_mem, test_size * sizeof(int),
                         hipMemcpyDeviceToHost, stream);
 #endif
@@ -482,9 +470,9 @@ void test_interop(cl::sycl::queue& q) {
   q.wait();
 
   constexpr bool has_hip_memcpy_test = (B == sycl::backend::hip) &&
-                    HIPSYCL_LIBKERNEL_COMPILER_SUPPORTS_HIP;
+                    ACPP_LIBKERNEL_COMPILER_SUPPORTS_HIP;
   constexpr bool has_cuda_memcpy_test = (B == sycl::backend::cuda) &&
-                    HIPSYCL_LIBKERNEL_COMPILER_SUPPORTS_CUDA;
+                    ACPP_LIBKERNEL_COMPILER_SUPPORTS_CUDA;
   if constexpr (has_hip_memcpy_test || has_cuda_memcpy_test) {
     for (std::size_t i = 0; i < test_size; ++i) {
       BOOST_TEST(initial_data[i] == target_data[i]);
@@ -508,7 +496,7 @@ BOOST_AUTO_TEST_CASE(custom_enqueue) {
     test_interop<sycl::backend::omp>(q);
 }
 #endif
-#ifdef HIPSYCL_EXT_CG_PROPERTY_RETARGET
+#ifdef ACPP_EXT_CG_PROPERTY_RETARGET
 BOOST_AUTO_TEST_CASE(cg_property_retarget) {
   using namespace cl;
 
@@ -516,14 +504,17 @@ BOOST_AUTO_TEST_CASE(cg_property_retarget) {
 
   std::vector<sycl::device> target_devices;
   for(const auto& dev : all_devices) {
-    if (dev.hipSYCL_has_compiled_kernels() && dev.is_gpu()) {
+    if (dev.AdaptiveCpp_has_compiled_kernels() && dev.is_gpu()) {
       target_devices.push_back(dev);
     }
   }
   sycl::device host_device{sycl::detail::get_host_device()};
 
   if(target_devices.size() > 0) {
-    sycl::queue q{target_devices[0], sycl::property_list{sycl::property::queue::in_order{}}};
+    sycl::queue q{
+        target_devices[0],
+        sycl::property_list{sycl::property::queue::in_order{},
+                            sycl::property::queue::AdaptiveCpp_retargetable{}}};
     int* ptr = sycl::malloc_shared<int>(1, q);
     *ptr = 0;
 
@@ -534,7 +525,7 @@ BOOST_AUTO_TEST_CASE(cg_property_retarget) {
         ++ptr[0];
     });
 
-    q.submit({sycl::property::command_group::hipSYCL_retarget{host_device}},
+    q.submit({sycl::property::command_group::AdaptiveCpp_retarget{host_device}},
       [&](sycl::handler& cgh){
         cgh.single_task<class retarget_host_kernel>([=](){
           ++ptr[0];
@@ -551,17 +542,17 @@ BOOST_AUTO_TEST_CASE(cg_property_retarget) {
 #endif
 
 
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 int get_total_group_size() {
   int group_size = 0;
-  __hipsycl_if_target_device(
-    group_size = __hipsycl_lsize_x * __hipsycl_lsize_y * __hipsycl_lsize_z;
+  __acpp_if_target_device(
+    group_size = __acpp_lsize_x * __acpp_lsize_y * __acpp_lsize_z;
   );
   return group_size;
 }
 
 
-#ifdef HIPSYCL_EXT_CG_PROPERTY_PREFER_GROUP_SIZE
+#ifdef ACPP_EXT_CG_PROPERTY_PREFER_GROUP_SIZE
 BOOST_AUTO_TEST_CASE(cg_property_preferred_group_size) {
   using namespace cl;
 
@@ -573,23 +564,23 @@ BOOST_AUTO_TEST_CASE(cg_property_preferred_group_size) {
   auto group_size2d = sycl::range{9,9};
   auto group_size3d = sycl::range{5,5,5};
 
-#if defined(__HIPSYCL_ENABLE_CUDA_TARGET__) ||                                 \
-    defined(__HIPSYCL_ENABLE_HIP_TARGET__) ||                                  \
-    defined(__HIPSYCL_ENABLE_LLVM_SSCP_TARGET__)
+#if defined(__ACPP_ENABLE_CUDA_TARGET__) ||                                 \
+    defined(__ACPP_ENABLE_HIP_TARGET__) ||                                  \
+    defined(__ACPP_ENABLE_LLVM_SSCP_TARGET__)
 #define DEVICE_MODEL
 #endif
 
-  q.submit({sycl::property::command_group::hipSYCL_prefer_group_size{
+  q.submit({sycl::property::command_group::AdaptiveCpp_prefer_group_size{
                group_size1d}},
            [&](sycl::handler &cgh) {
              cgh.parallel_for<class property_preferred_group_size1>(
                 sycl::range{1000}, [=](sycl::id<1> idx) {
                   if (idx[0] == 0) {
 #if defined(DEVICE_MODEL)
-                    __hipsycl_if_target_device(
+                    __acpp_if_target_device(
                       gsize[0] = get_total_group_size();
                     );
-                    __hipsycl_if_target_host(
+                    __acpp_if_target_host(
                       gsize[0] = 1;
                     );
 #else
@@ -599,17 +590,17 @@ BOOST_AUTO_TEST_CASE(cg_property_preferred_group_size) {
                 });
            });
 
-  q.submit({sycl::property::command_group::hipSYCL_prefer_group_size{
+  q.submit({sycl::property::command_group::AdaptiveCpp_prefer_group_size{
                group_size2d}},
            [&](sycl::handler &cgh) {
              cgh.parallel_for<class property_preferred_group_size2>(
                  sycl::range{30,30}, [=](sycl::id<2> idx) {
                    if (idx[0] == 0 && idx[1] == 0) {
 #if defined(DEVICE_MODEL)
-                    __hipsycl_if_target_device(
+                    __acpp_if_target_device(
                       gsize[1] = get_total_group_size();
                     );
-                    __hipsycl_if_target_host(
+                    __acpp_if_target_host(
                       gsize[1] = 2;
                     );
 #else
@@ -620,17 +611,17 @@ BOOST_AUTO_TEST_CASE(cg_property_preferred_group_size) {
            });
 
 
-  q.submit({sycl::property::command_group::hipSYCL_prefer_group_size{
+  q.submit({sycl::property::command_group::AdaptiveCpp_prefer_group_size{
                group_size3d}},
            [&](sycl::handler &cgh) {
              cgh.parallel_for<class property_preferred_group_size3>(
                  sycl::range{10,10,10}, [=](sycl::id<3> idx) {
                    if (idx[0] == 0 && idx[1] == 0) {
 #if defined(DEVICE_MODEL)
-                    __hipsycl_if_target_device(
+                    __acpp_if_target_device(
                      gsize[2] = get_total_group_size();
                     );
-                    __hipsycl_if_target_host(
+                    __acpp_if_target_host(
                      gsize[2] = 3;
                     );
 #else
@@ -662,7 +653,7 @@ BOOST_AUTO_TEST_CASE(cg_property_preferred_group_size) {
 }
 #endif
 
-#ifdef HIPSYCL_EXT_CG_PROPERTY_PREFER_EXECUTION_LANE
+#ifdef ACPP_EXT_CG_PROPERTY_PREFER_EXECUTION_LANE
 
 BOOST_AUTO_TEST_CASE(cg_property_prefer_execution_lane) {
 
@@ -671,7 +662,7 @@ BOOST_AUTO_TEST_CASE(cg_property_prefer_execution_lane) {
   // Only compile testing for now
   for(std::size_t i = 0; i < 100; ++i) {
     q.submit(
-        {cl::sycl::property::command_group::hipSYCL_prefer_execution_lane{i}},
+        {cl::sycl::property::command_group::AdaptiveCpp_prefer_execution_lane{i}},
         [&](cl::sycl::handler &cgh) {
           cgh.single_task<class prefer_execution_lane_test>([=]() {});
         });
@@ -681,7 +672,7 @@ BOOST_AUTO_TEST_CASE(cg_property_prefer_execution_lane) {
 
 #endif
 
-#ifdef HIPSYCL_EXT_PREFETCH_HOST
+#ifdef ACPP_EXT_PREFETCH_HOST
 BOOST_AUTO_TEST_CASE(prefetch_host) {
   using namespace cl;
 
@@ -705,7 +696,7 @@ BOOST_AUTO_TEST_CASE(prefetch_host) {
   sycl::free(shared_mem, q);
 }
 #endif
-#ifdef HIPSYCL_EXT_BUFFER_USM_INTEROP
+#ifdef ACPP_EXT_BUFFER_USM_INTEROP
 BOOST_AUTO_TEST_CASE(buffer_introspection) {
   using namespace cl;
 
@@ -844,7 +835,7 @@ BOOST_AUTO_TEST_CASE(buffers_over_usm_pointers) {
 }
 
 #endif
-#ifdef HIPSYCL_EXT_BUFFER_PAGE_SIZE
+#ifdef ACPP_EXT_BUFFER_PAGE_SIZE
 
 BOOST_AUTO_TEST_CASE(buffer_page_size) {
   using namespace cl;
@@ -856,7 +847,7 @@ BOOST_AUTO_TEST_CASE(buffer_page_size) {
   const std::size_t size = 1000;
   const std::size_t page_size = 512;
   sycl::buffer<int, 2> buff{sycl::range{size, size},
-                            sycl::property::buffer::hipSYCL_page_size<2>{
+                            sycl::property::buffer::AdaptiveCpp_page_size<2>{
                                 sycl::range{page_size, page_size}}};
 
   // We have 4 pages
@@ -899,7 +890,7 @@ BOOST_AUTO_TEST_CASE(buffer_page_size) {
 }
 
 #endif
-#ifdef HIPSYCL_EXT_EXPLICIT_BUFFER_POLICIES
+#ifdef ACPP_EXT_EXPLICIT_BUFFER_POLICIES
 BOOST_AUTO_TEST_CASE(explicit_buffer_policies) {
   using namespace cl;
   sycl::queue q;
@@ -984,8 +975,8 @@ BOOST_AUTO_TEST_CASE(explicit_buffer_policies) {
 
 }
 #endif
-#ifdef HIPSYCL_EXT_ACCESSOR_VARIANTS
-#ifdef HIPSYCL_EXT_ACCESSOR_VARIANT_DEDUCTION
+#ifdef ACPP_EXT_ACCESSOR_VARIANTS
+#ifdef ACPP_EXT_ACCESSOR_VARIANT_DEDUCTION
 
 template <class T, int Dim, cl::sycl::access_mode M, cl::sycl::target Tgt,
           cl::sycl::accessor_variant V>
@@ -1060,8 +1051,8 @@ BOOST_AUTO_TEST_CASE(accessor_variants) {
 
 #endif
 #endif
-#if defined(HIPSYCL_EXT_UPDATE_DEVICE) &&                                      \
-    defined(HIPSYCL_EXT_BUFFER_USM_INTEROP)
+#if defined(ACPP_EXT_UPDATE_DEVICE) &&                                      \
+    defined(ACPP_EXT_BUFFER_USM_INTEROP)
 BOOST_AUTO_TEST_CASE(update_device) {
   using namespace cl;
   sycl::queue q;
@@ -1095,13 +1086,15 @@ BOOST_AUTO_TEST_CASE(update_device) {
     BOOST_CHECK(target_buff[i] == static_cast<int>(i));
 }
 #endif
-#ifdef HIPSYCL_EXT_QUEUE_WAIT_LIST
+#ifdef ACPP_EXT_QUEUE_WAIT_LIST
 
 BOOST_AUTO_TEST_CASE(queue_wait_list) {
   using namespace cl;
   sycl::queue out_of_order_q;
   sycl::queue in_order_q{
-      sycl::property_list{sycl::property::queue::in_order{}}};
+      sycl::property_list{sycl::property::queue::in_order{},
+                          // Needed for accurate get_wait_list results
+                          sycl::property::queue::AdaptiveCpp_retargetable{}}};
 
   auto test = [](sycl::queue& q){
     std::vector<sycl::event> evts;
@@ -1121,7 +1114,7 @@ BOOST_AUTO_TEST_CASE(queue_wait_list) {
 }
 
 #endif
-#ifdef HIPSYCL_EXT_MULTI_DEVICE_QUEUE
+#if defined(ACPP_EXT_MULTI_DEVICE_QUEUE) && defined(ACPP_TEST_MULTI_DEVICE_QUEUE)
 
 BOOST_AUTO_TEST_CASE(multi_device_queue) {
   using namespace cl;
@@ -1152,16 +1145,16 @@ BOOST_AUTO_TEST_CASE(multi_device_queue) {
   BOOST_CHECK(hacc[0] == 102);
 }
 #endif
-#ifdef HIPSYCL_EXT_COARSE_GRAINED_EVENTS
+#ifdef ACPP_EXT_COARSE_GRAINED_EVENTS
 BOOST_AUTO_TEST_CASE(coarse_grained_events) {
   using namespace cl;
-  sycl::queue q{sycl::property::queue::hipSYCL_coarse_grained_events{}};
+  sycl::queue q{sycl::property::queue::AdaptiveCpp_coarse_grained_events{}};
   
   auto e1 = q.single_task([=](){});
   std::vector<sycl::event> events;
   for(int i=0; i < 10; ++i) {
     auto e = q.submit(
-        {sycl::property::command_group::hipSYCL_prefer_execution_lane{
+        {sycl::property::command_group::AdaptiveCpp_prefer_execution_lane{
             static_cast<std::size_t>(
                 i)}}, // Make sure we alternate across all lanes/streams
         [&](sycl::handler &cgh) {
@@ -1177,4 +1170,69 @@ BOOST_AUTO_TEST_CASE(coarse_grained_events) {
   }
 }
 #endif
+
+#ifdef ACPP_EXT_SPECIALIZED
+BOOST_AUTO_TEST_CASE(sycl_specialized) {
+  using namespace cl;
+  sycl::queue q;
+
+  uint64_t* data = sycl::malloc_shared<uint64_t>(1, q);
+
+  //Ctor
+  {
+    *data = 1;
+    sycl::specialized<uint64_t> s{10};
+    q.submit([&](sycl::handler& cgh){
+      cgh.single_task([=](){
+        *data += s;
+      });
+    }).wait();
+
+    BOOST_CHECK(*data == 11);
+  }
+
+  //Copy assignment operator (const T&)
+  {
+    *data = 1;
+    sycl::specialized<uint64_t> s;
+    q.submit([&](sycl::handler& cgh){
+      s = 10;
+      cgh.single_task([=](){
+        *data += s;
+      });
+    }).wait();
+
+    BOOST_CHECK(*data == 11);
+  }
+
+   //Copy assignment operator (sycl::specialized)
+  {
+    *data = 1;
+    sycl::specialized<uint64_t> s_tmp{10};
+    q.submit([&](sycl::handler& cgh){
+      sycl::specialized<uint64_t> s = s_tmp;
+      cgh.single_task([=](){
+        *data += s;
+      });
+    }).wait();
+
+    BOOST_CHECK(*data == 11);
+  }
+
+  sycl::free(data, q);
+}
+#endif
+#ifdef SYCL_KHR_DEFAULT_CONTEXT
+BOOST_AUTO_TEST_CASE(khr_default_context) {
+  using namespace cl;
+  sycl::queue q1;
+  sycl::queue q2;
+
+  BOOST_CHECK(q1.get_context() == q2.get_context());
+  BOOST_CHECK(q1.get_device().get_platform().khr_get_default_context() ==
+              q1.get_context());
+  BOOST_CHECK(sycl::context{} != q1.get_context());
+}
+#endif
+
 BOOST_AUTO_TEST_SUITE_END()

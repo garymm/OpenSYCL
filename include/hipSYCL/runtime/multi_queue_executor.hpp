@@ -1,36 +1,21 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_MULTI_QUEUE_EXECUTOR_HPP
 #define HIPSYCL_MULTI_QUEUE_EXECUTOR_HPP
 
 #include <cmath>
 #include <cassert>
 #include <functional>
+#include <atomic>
+#include <mutex>
 
 #include "backend.hpp"
 #include "device_id.hpp"
@@ -144,7 +129,7 @@ public:
   get_kernel_execution_lane_range(device_id dev) const;
 
   virtual void
-  submit_directly(dag_node_ptr node, operation *op,
+  submit_directly(const dag_node_ptr& node, operation *op,
                   const node_list_t &reqs) override;
 
   template <class F> void for_each_queue(rt::device_id dev, F handler) const {
@@ -154,9 +139,9 @@ public:
   }
 
   virtual bool can_execute_on_device(const device_id& dev) const override;
-  virtual bool is_submitted_by_me(dag_node_ptr node) const override;
+  virtual bool is_submitted_by_me(const dag_node_ptr& node) const override;
 
-  bool find_assigned_lane_index(dag_node_ptr node, std::size_t& index_out) const;
+  bool find_assigned_lane_index(const dag_node_ptr& node, std::size_t& index_out) const;
 private:
   
 
@@ -170,9 +155,35 @@ private:
   };
 
   std::vector<per_device_data> _device_data;
-  std::size_t _num_submitted_operations;
   std::vector<inorder_queue*> _managed_queues;
   backend_id _backend;
+};
+
+template<class Executor>
+class lazily_constructed_executor {
+public:
+  template<class Factory>
+  lazily_constructed_executor(Factory&& F)
+  : _is_initialized{false}, _factory{std::forward<Factory>(F)} {}
+
+  Executor* get() {
+    if(_is_initialized.load(std::memory_order_acquire))
+      return _ptr.get();
+    else {
+      std::lock_guard<std::mutex> lock{_mutex};
+      if(!_is_initialized.load(std::memory_order_acquire)) {
+        _ptr = _factory();
+        _is_initialized.store(true, std::memory_order_release);
+      }
+      return _ptr.get();
+    }
+  }
+
+private:
+  std::atomic<bool> _is_initialized;
+  std::mutex _mutex;
+  std::function<std::unique_ptr<Executor>()> _factory;
+  std::unique_ptr<Executor> _ptr = nullptr;
 };
 
 }

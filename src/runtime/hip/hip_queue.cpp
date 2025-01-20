@@ -1,30 +1,15 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2020 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
+#include "hipSYCL/runtime/kernel_configuration.hpp"
+#include "hipSYCL/runtime/adaptivity_engine.hpp"
 #include "hipSYCL/runtime/hip/hip_target.hpp"
 #include "hipSYCL/common/hcf_container.hpp"
 #include "hipSYCL/runtime/hip/hip_hardware_manager.hpp"
@@ -61,7 +46,7 @@ void host_synchronization_callback(hipStream_t stream, hipError_t status,
   dag_node_ptr* node = static_cast<dag_node_ptr*>(userData);
   
   if(status != hipSuccess) {
-    register_error(__hipsycl_here(),
+    register_error(__acpp_here(),
                    error_info{"hip_queue callback: HIP returned error code.",
                               error_code{"HIP", status}});
   }
@@ -76,10 +61,12 @@ void host_synchronization_callback(hipStream_t stream, hipError_t status,
 class hip_instrumentation_guard {
 public:
   hip_instrumentation_guard(hip_queue *q,
-                             operation &op, dag_node_ptr node) 
+                             operation &op, dag_node* node) 
                              : _queue{q}, _operation{&op}, _node{node} {
     assert(q);
-    assert(_node);
+    
+    if(!_node)
+      return;
 
     if (_node->get_execution_hints()
             .has_hint<
@@ -103,6 +90,9 @@ public:
   }
 
   ~hip_instrumentation_guard() {
+    if(!_node)
+      return;
+
     if (_node->get_execution_hints()
             .has_hint<rt::hints::request_instrumentation_finish_timestamp>()) {
       std::shared_ptr<dag_node_event> task_finish = _queue->insert_event();
@@ -124,12 +114,12 @@ public:
 private:
   hip_queue* _queue;
   operation* _operation;
-  dag_node_ptr _node;
+  dag_node* _node;
   std::shared_ptr<dag_node_event> _task_start;
 };
 
 result launch_kernel_from_module(ihipModule_t *module,
-                                 const std::string &kernel_name,
+                                 std::string_view kernel_name,
                                  const rt::range<3> &grid_size,
                                  const rt::range<3> &block_size,
                                  unsigned dynamic_shared_mem,
@@ -138,10 +128,10 @@ result launch_kernel_from_module(ihipModule_t *module,
 
   hipFunction_t kernel_func;
   hipError_t err =
-      hipModuleGetFunction(&kernel_func, module, kernel_name.c_str());
+      hipModuleGetFunction(&kernel_func, module, kernel_name.data());
 
   if(err != hipSuccess) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: could not extract kernel from module",
                                  error_code{"HIP", static_cast<int>(err)}});
   }
@@ -156,7 +146,7 @@ result launch_kernel_from_module(ihipModule_t *module,
                        dynamic_shared_mem, stream, kernel_args, nullptr);
 
   if (err != hipSuccess) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: could not submit kernel from module",
                                  error_code{"HIP", static_cast<int>(err)}});
   }
@@ -173,8 +163,12 @@ void hip_queue::activate_device() const {
 
 hip_queue::hip_queue(hip_backend *be, device_id dev, int priority)
     : _dev{dev}, _stream{nullptr}, _backend{be},
-      _multipass_code_object_invoker{this}, _sscp_code_object_invoker{this} {
+      _multipass_code_object_invoker{this}, _sscp_code_object_invoker{this},
+      _kernel_cache{kernel_cache::get()} {
   this->activate_device();
+
+  _reflection_map = glue::jit::construct_default_reflection_map(
+      be->get_hardware_manager()->get_device(dev.get_id()));
 
   hipError_t err;
   if(priority == 0) {
@@ -184,7 +178,7 @@ hip_queue::hip_queue(hip_backend *be, device_id dev, int priority)
     err = hipStreamCreateWithPriority(&_stream, hipStreamNonBlocking, priority);
   }
   if (err != hipSuccess) {
-    register_error(__hipsycl_here(),
+    register_error(__acpp_here(),
                    error_info{"hip_queue: Couldn't construct backend stream",
                               error_code{"HIP", err}});
     return;
@@ -198,7 +192,7 @@ hipStream_t hip_queue::get_stream() const { return _stream; }
 hip_queue::~hip_queue() {
   auto err = hipStreamDestroy(_stream);
   if (err != hipSuccess) {
-    register_error(__hipsycl_here(),
+    register_error(__acpp_here(),
                    error_info{"hip_queue: Couldn't destroy stream",
                               error_code{"HIP", err}});
   }
@@ -217,7 +211,7 @@ std::shared_ptr<dag_node_event> hip_queue::insert_event() {
   hipError_t err = hipEventRecord(evt, this->get_stream());
   if (err != hipSuccess) {
     register_error(
-        __hipsycl_here(),
+        __acpp_here(),
         error_info{"hip_queue: Couldn't record event", error_code{"HIP", err}});
     return nullptr;
   }
@@ -233,7 +227,7 @@ std::shared_ptr<dag_node_event> hip_queue::create_queue_completion_event() {
 
 
 
-result hip_queue::submit_memcpy(memcpy_operation & op, dag_node_ptr node) {
+result hip_queue::submit_memcpy(memcpy_operation & op, const dag_node_ptr& node) {
 
   device_id source_dev = op.source().get_device();
   device_id dest_dev = op.dest().get_device();
@@ -263,6 +257,9 @@ result hip_queue::submit_memcpy(memcpy_operation & op, dag_node_ptr node) {
     if (dest_dev.get_full_backend_descriptor().sw_platform ==
         api_platform::hip) {
       copy_kind = hipMemcpyHostToDevice;
+    } else if (dest_dev.get_full_backend_descriptor().hw_platform ==
+        hardware_platform::cpu) {
+      copy_kind = hipMemcpyHostToHost;
     } else
       assert(false && "Unknown copy destination platform");
   } else
@@ -290,7 +287,7 @@ result hip_queue::submit_memcpy(memcpy_operation & op, dag_node_ptr node) {
   
   assert(dimension >= 1 && dimension <= 3);
 
-  hip_instrumentation_guard instrumentation{this, op, node};
+  hip_instrumentation_guard instrumentation{this, op, node.get()};
 
   hipError_t err = hipSuccess;
   if (dimension == 1) {
@@ -333,7 +330,7 @@ result hip_queue::submit_memcpy(memcpy_operation & op, dag_node_ptr node) {
   }
 
   if (err != hipSuccess) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: Couldn't submit memcpy",
                                  error_code{"HIP", err}});
   }
@@ -341,34 +338,26 @@ result hip_queue::submit_memcpy(memcpy_operation & op, dag_node_ptr node) {
   return make_success();
 }
 
-result hip_queue::submit_kernel(kernel_operation &op, dag_node_ptr node) {
+result hip_queue::submit_kernel(kernel_operation &op, const dag_node_ptr& node) {
 
   this->activate_device();
-  rt::backend_kernel_launcher *l =
-      op.get_launcher().find_launcher(backend_id::hip);
-  
-  if (!l)
-    return make_error(__hipsycl_here(), error_info{"Could not obtain backend kernel launcher"});
-  l->set_params(this);
   
   rt::backend_kernel_launch_capabilities cap;
   
   cap.provide_multipass_invoker(&_multipass_code_object_invoker);
   cap.provide_sscp_invoker(&_sscp_code_object_invoker);
 
-  l->set_backend_capabilities(cap);
-
-  hip_instrumentation_guard instrumentation{this, op, node};
-  l->invoke(node.get(), op.get_launcher().get_kernel_configuration());
+  hip_instrumentation_guard instrumentation{this, op, node.get()};
+  return op.get_launcher().invoke(backend_id::hip, this, cap, node.get());
 
   return make_success();
 }
 
-result hip_queue::submit_prefetch(prefetch_operation& op, dag_node_ptr node) {
+result hip_queue::submit_prefetch(prefetch_operation& op, const dag_node_ptr& node) {
   // Need to enable instrumentation even if we cannot enable actual
   // prefetches so that the user will be able to access instrumentation
   // properties of the event.
-  hip_instrumentation_guard instrumentation{this, op, node};
+  hip_instrumentation_guard instrumentation{this, op, node.get()};
 #ifdef HIPSYCL_RT_HIP_SUPPORTS_UNIFIED_MEMORY
   
   hipError_t err = hipSuccess;
@@ -382,7 +371,7 @@ result hip_queue::submit_prefetch(prefetch_operation& op, dag_node_ptr node) {
   }
 
   if (err != hipSuccess) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: hipMemPrefetchAsync() failed",
                                  error_code{"HIP", err}});
   }
@@ -396,14 +385,14 @@ result hip_queue::submit_prefetch(prefetch_operation& op, dag_node_ptr node) {
   return make_success();
 }
 
-result hip_queue::submit_memset(memset_operation &op, dag_node_ptr node) {
+result hip_queue::submit_memset(memset_operation &op, const dag_node_ptr& node) {
 
-  hip_instrumentation_guard instrumentation{this, op, node};
+  hip_instrumentation_guard instrumentation{this, op, node.get()};
   hipError_t err = hipMemsetAsync(op.get_pointer(), op.get_pattern(),
                                   op.get_num_bytes(), get_stream());
 
   if (err != hipSuccess) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: hipMemsetAsync() failed",
                                  error_code{"HIP", err}});
   }
@@ -416,7 +405,7 @@ result hip_queue::wait() {
   auto err = hipStreamSynchronize(_stream);
 
   if(err != hipSuccess) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: Couldn't synchronize with stream",
                                  error_code{"HIP", err}});
   }
@@ -431,7 +420,7 @@ result hip_queue::query_status(inorder_queue_status &status) {
   } else if(err == hipErrorNotReady) {
     status = inorder_queue_status{false};
   } else {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: Could not query stream status",
                                  error_code{"HIP", static_cast<int>(err)}});
   }
@@ -441,7 +430,7 @@ result hip_queue::query_status(inorder_queue_status &status) {
 
 /// Causes the queue to wait until an event on another queue has occured.
 /// the other queue must be from the same backend
-result hip_queue::submit_queue_wait_for(dag_node_ptr node) {
+result hip_queue::submit_queue_wait_for(const dag_node_ptr& node) {
   auto evt = node->get_event();
   assert(dynamic_is<inorder_queue_event<hipEvent_t>>(evt.get()));
 
@@ -449,7 +438,7 @@ result hip_queue::submit_queue_wait_for(dag_node_ptr node) {
       cast<inorder_queue_event<hipEvent_t>>(evt.get());
   auto err = hipStreamWaitEvent(_stream, hip_evt->request_backend_event(), 0);
   if (err != hipSuccess) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: hipStreamWaitEvent() failed",
                                  error_code{"HIP", err}});
   }
@@ -457,7 +446,7 @@ result hip_queue::submit_queue_wait_for(dag_node_ptr node) {
   return make_success();
 }
 
-result hip_queue::submit_external_wait_for(dag_node_ptr node) {
+result hip_queue::submit_external_wait_for(const dag_node_ptr& node) {
 
   dag_node_ptr* user_data = new dag_node_ptr;
   assert(user_data);
@@ -468,7 +457,7 @@ result hip_queue::submit_external_wait_for(dag_node_ptr node) {
                            reinterpret_cast<void *>(user_data), 0);
 
   if (err != hipSuccess) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                    error_info{"hip_queue: Couldn't submit stream callback",
                               error_code{"HIP", err}});
   }
@@ -490,22 +479,11 @@ result hip_queue::submit_multipass_kernel_from_code_object(
 
   this->activate_device();
   
-  std::string global_kernel_name = op.get_global_kernel_name();
-  const kernel_cache::kernel_name_index_t *kidx =
-      kernel_cache::get().get_global_kernel_index(global_kernel_name);
-
-  if(!kidx) {
-    return make_error(
-        __hipsycl_here(),
-        error_info{"hip_queue: Could not obtain kernel index for kernel " +
-                   global_kernel_name});
-  }
-
   const common::hcf_container *hcf =
         rt::hcf_cache::get().get_hcf(hcf_object);
   if (!hcf)
     return make_error(
-        __hipsycl_here(),
+        __acpp_here(),
         error_info{"hip_queue: Could not access requested HCF object"});
 
   assert(hcf->root_node());
@@ -517,18 +495,23 @@ result hip_queue::submit_multipass_kernel_from_code_object(
   // compiled for
   std::string selected_target = available_targets[0];
   int device = _dev.get_id();
+  
+  kernel_configuration config;
+  config.append_base_configuration(
+      kernel_base_config_parameter::backend_id, backend_id::hip);
+  config.append_base_configuration(
+      kernel_base_config_parameter::compilation_flow,
+      compilation_flow::explicit_multipass);
+  config.append_base_configuration(
+      kernel_base_config_parameter::hcf_object_id, hcf_object);
+  config.append_base_configuration(
+      kernel_base_config_parameter::target_arch, selected_target);
 
-  auto code_object_selector = [&](const code_object* candidate) -> bool {
-    // Also no need to check for HIP backend since the kernel cache already
-    // guarantees that we are only given candidates for the requested backend (CUDA).
-    return (candidate->target_arch() == selected_target) &&
-           (candidate->state() == code_object_state::executable) &&
-           (static_cast<const hip_executable_object *>(candidate)
-                ->source_compilation_flow() ==
-            compilation_flow::explicit_multipass) &&
-           (static_cast<const hip_executable_object *>(candidate)
-                ->get_device() == device);
-  };
+  auto binary_configuration_id = config.generate_id();
+  auto code_object_configuration_id = binary_configuration_id;
+  kernel_configuration::extend_hash(
+      code_object_configuration_id,
+      kernel_base_config_parameter::runtime_device, device);
 
   // Will be invoked by the kernel cache in case there is a miss in the kernel
   // cache and we have to construct a new code object
@@ -564,13 +547,12 @@ result hip_queue::submit_multipass_kernel_from_code_object(
     return exec_obj;
   };
 
-  const code_object *obj = kernel_cache::get().get_or_construct_code_object(
-      *kidx, backend_kernel_name, backend_id::hip, hcf_object,
-      code_object_selector, code_object_constructor);
+  const code_object *obj = _kernel_cache->get_or_construct_code_object(
+      code_object_configuration_id, code_object_constructor);
 
   
   if(!obj) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: Code object construction failed"});
   }
 
@@ -585,26 +567,14 @@ result hip_queue::submit_multipass_kernel_from_code_object(
 }
 
 result hip_queue::submit_sscp_kernel_from_code_object(
-      const kernel_operation &op, hcf_object_id hcf_object,
-      const std::string &kernel_name, const rt::range<3> &num_groups,
-      const rt::range<3> &group_size, unsigned local_mem_size, void **args,
-      std::size_t *arg_sizes, std::size_t num_args,
-      const glue::kernel_configuration &config) {
+    const kernel_operation &op, hcf_object_id hcf_object,
+    std::string_view kernel_name, const rt::hcf_kernel_info *kernel_info,
+    const rt::range<3> &num_groups, const rt::range<3> &group_size,
+    unsigned local_mem_size, void **args, std::size_t *arg_sizes,
+    std::size_t num_args, const kernel_configuration &initial_config) {
 #ifdef HIPSYCL_WITH_SSCP_COMPILER
   this->activate_device();
   
-  std::string global_kernel_name = op.get_global_kernel_name();
-  const kernel_cache::kernel_name_index_t *kidx =
-      kernel_cache::get().get_global_kernel_index(global_kernel_name);
-
-  if(!kidx) {
-    return make_error(
-        __hipsycl_here(),
-        error_info{"hip_queue: Could not obtain kernel index for kernel " +
-                   global_kernel_name});
-  }
-
-  auto configuration_id = config.generate_id();
   int device = _dev.get_id();
 
   hip_hardware_context *ctx = static_cast<hip_hardware_context *>(
@@ -612,58 +582,91 @@ result hip_queue::submit_sscp_kernel_from_code_object(
 
   std::string target_arch_name = ctx->get_device_arch();
 
-  const hcf_kernel_info *kernel_info =
-      rt::hcf_cache::get().get_kernel_info(hcf_object, kernel_name);
   if(!kernel_info) {
     return make_error(
-        __hipsycl_here(),
+        __acpp_here(),
         error_info{"hip_queue: Could not obtain hcf kernel info for kernel " +
-            global_kernel_name});
+            std::string{kernel_name}});
   }
 
-  auto code_object_selector = [&](const code_object* candidate) -> bool {
-    
-    if ((candidate->managing_backend() != backend_id::hip) ||
-        (candidate->source_compilation_flow() != compilation_flow::sscp) ||
-        (candidate->state() != code_object_state::executable))
-      return false;
 
-    const hip_sscp_executable_object *obj =
-        static_cast<const hip_sscp_executable_object *>(candidate);
-    
-    if(obj->configuration_id() != configuration_id)
-      return false;
+  _arg_mapper.construct_mapping(*kernel_info, args, arg_sizes, num_args);
 
-    return obj->get_device() == device;
+  if(!_arg_mapper.mapping_available()) {
+    return make_error(
+        __acpp_here(),
+        error_info{
+            "hip_queue: Could not map C++ arguments to kernel arguments"});
+  }
+
+  kernel_adaptivity_engine adaptivity_engine{
+      hcf_object, kernel_name, kernel_info, _arg_mapper, num_groups,
+      group_size, args,        arg_sizes,   num_args, local_mem_size};
+  
+  _config = initial_config;
+  _config.append_base_configuration(
+      kernel_base_config_parameter::backend_id, backend_id::hip);
+  _config.append_base_configuration(
+      kernel_base_config_parameter::compilation_flow,
+      compilation_flow::sscp);
+  _config.append_base_configuration(
+      kernel_base_config_parameter::hcf_object_id, hcf_object);
+
+  for(const auto& flag : kernel_info->get_compilation_flags())
+    _config.set_build_flag(flag);
+  for(const auto& opt : kernel_info->get_compilation_options())
+    _config.set_build_option(opt.first, opt.second);
+
+  _config.set_build_option(kernel_build_option::amdgpu_target_device,
+                          target_arch_name);
+
+  auto binary_configuration_id = adaptivity_engine.finalize_binary_configuration(_config);
+  auto code_object_configuration_id = binary_configuration_id;
+  kernel_configuration::extend_hash(
+      code_object_configuration_id,
+      kernel_base_config_parameter::runtime_device, device);
+
+  auto get_image_and_kernel_names =
+      [&](std::vector<std::string> &contained_kernels) -> std::string {
+    return adaptivity_engine.select_image_and_kernels(&contained_kernels);
   };
 
-  auto code_object_constructor = [&]() -> code_object * {
-    const common::hcf_container *hcf =
-        rt::hcf_cache::get().get_hcf(hcf_object);
+  auto jit_compiler = [&](std::string& compiled_image) -> bool {
     
     std::vector<std::string> kernel_names;
-    std::string selected_image_name =
-        glue::jit::select_image(kernel_info, &kernel_names);
+    std::string selected_image_name = get_image_and_kernel_names(kernel_names);
 
     // Construct amdgpu translator to compile the specified kernels
     std::unique_ptr<compiler::LLVMToBackendTranslator> translator = 
       compiler::createLLVMToAmdgpuTranslator(kernel_names);
 
-    translator->setBuildOption("amdgpu-target-device", target_arch_name);
-
     // Lower kernels
-    std::string amdgpu_image;
-    auto err = glue::jit::compile(translator.get(),
-        hcf, selected_image_name, config, amdgpu_image);
+    rt::result err;
+    if(kernel_names.size() == 1) {
+      err = glue::jit::dead_argument_elimination::compile_kernel(
+          translator.get(), hcf_object, selected_image_name, _config,
+          binary_configuration_id, _reflection_map, compiled_image);
+    } else {
+      err =
+          glue::jit::compile(translator.get(), hcf_object, selected_image_name,
+                             _config, _reflection_map, compiled_image);
+    }
     
     if(!err.is_success()) {
       register_error(err);
-      return nullptr;
+      return false;
     }
+    return true;
+  };
 
+  auto code_object_constructor = [&](const std::string& amdgpu_image) -> code_object * {
+   
+    std::vector<std::string> kernel_names;
+    get_image_and_kernel_names(kernel_names);
+    
     hip_sscp_executable_object *exec_obj = new hip_sscp_executable_object{
         amdgpu_image, target_arch_name, hcf_object,
-        kernel_names, device,           config};
+        kernel_names, device,           _config};
     result r = exec_obj->get_build_result();
 
     HIPSYCL_DEBUG_INFO
@@ -676,40 +679,42 @@ result hip_queue::submit_sscp_kernel_from_code_object(
       return nullptr;
     }
 
+    if(kernel_names.size() == 1)
+      exec_obj->get_jit_output_metadata().kernel_retained_arguments_indices =
+          glue::jit::dead_argument_elimination::
+              retrieve_retained_arguments_mask(binary_configuration_id);
+
     return exec_obj;
   };
 
-  const code_object *obj = kernel_cache::get().get_or_construct_code_object(
-      *kidx, kernel_name, backend_id::hip, hcf_object,
-      code_object_selector, code_object_constructor);
+  const code_object *obj = _kernel_cache->get_or_construct_jit_code_object(
+      code_object_configuration_id, binary_configuration_id,
+      jit_compiler, code_object_constructor);
 
   
   if(!obj) {
-    return make_error(__hipsycl_here(),
+    return make_error(__acpp_here(),
                       error_info{"hip_queue: Code object construction failed"});
+  }
+
+  if(obj->get_jit_output_metadata().kernel_retained_arguments_indices.has_value()) {
+    _arg_mapper.apply_dead_argument_elimination_mask(
+        obj->get_jit_output_metadata()
+            .kernel_retained_arguments_indices.value());
   }
 
   ihipModule_t *module =
       static_cast<const hip_executable_object *>(obj)->get_module();
   assert(module);
 
-  glue::jit::cxx_argument_mapper arg_mapper{*kernel_info, args, arg_sizes,
-                                            num_args};
-  if(!arg_mapper.mapping_available()) {
-    return make_error(
-        __hipsycl_here(),
-        error_info{
-            "hip_queue: Could not map C++ arguments to kernel arguments"});
-  }
-
   return launch_kernel_from_module(
       module, kernel_name, num_groups, group_size, local_mem_size, _stream,
-      arg_mapper.get_mapped_args(),
-      const_cast<std::size_t *>(arg_mapper.get_mapped_arg_sizes()),
-      arg_mapper.get_mapped_num_args());
+      _arg_mapper.get_mapped_args(),
+      const_cast<std::size_t *>(_arg_mapper.get_mapped_arg_sizes()),
+      _arg_mapper.get_mapped_num_args());
 #else
   return make_error(
-      __hipsycl_here(),
+      __acpp_here(),
       error_info{
           "hip_queue: SSCP kernel launch was requested, but hipSYCL was "
           "not built with HIP SSCP support."});
@@ -733,7 +738,7 @@ result hip_multipass_code_object_invoker::submit_kernel(
   assert(_queue);
 
   std::string kernel_name = kernel_body_name;
-  if(kernel_name_tag.find("__hipsycl_unnamed_kernel") == std::string::npos)
+  if(kernel_name_tag.find("__acpp_unnamed_kernel") == std::string::npos)
     kernel_name = kernel_name_tag;
 
   return _queue->submit_multipass_kernel_from_code_object(
@@ -745,14 +750,14 @@ result hip_sscp_code_object_invoker::submit_kernel(
     const kernel_operation &op, hcf_object_id hcf_object,
     const rt::range<3> &num_groups, const rt::range<3> &group_size,
     unsigned local_mem_size, void **args, std::size_t *arg_sizes,
-    std::size_t num_args, const std::string &kernel_name,
-    const glue::kernel_configuration &config) {
+    std::size_t num_args, std::string_view kernel_name,
+    const rt::hcf_kernel_info *kernel_info,
+    const kernel_configuration &config) {
 
   return _queue->submit_sscp_kernel_from_code_object(
-      op, hcf_object, kernel_name, num_groups, group_size, local_mem_size, args,
-      arg_sizes, num_args, config);
+      op, hcf_object, kernel_name, kernel_info, num_groups, group_size,
+      local_mem_size, args, arg_sizes, num_args, config);
 }
-
 }
 }
 

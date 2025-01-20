@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_DATA_HPP
 #define HIPSYCL_DATA_HPP
 
@@ -434,7 +417,7 @@ public:
                  "a memory leak."
               << std::endl;
         } else {
-          alloc.managing_allocator->free(alloc.memory);
+          rt::deallocate(alloc.managing_allocator, alloc.memory);
         }
       }
       return true;
@@ -556,7 +539,7 @@ public:
     range<3> num_pages = pr.second;
 
     // Find outdated regions among pages
-    bool was_found = _allocations.select_and_handle(
+    [[maybe_unused]] bool was_found = _allocations.select_and_handle(
         default_allocation_selector{d}, [&](auto &alloc) {
           alloc.invalid_pages.intersections_with(
               std::make_pair(first_page, num_pages), out);
@@ -625,12 +608,14 @@ public:
     assert(has_allocation(dev));
 
     Memory_descriptor mem{};
-    bool was_found = _allocations.select_and_handle(
+
+    [[maybe_unused]] bool was_found = _allocations.select_and_handle(
         default_allocation_selector{dev}, [&](const auto &alloc) {
           mem = alloc.memory;
     });
 
     assert(was_found);
+
     return mem;
   }
 
@@ -638,12 +623,14 @@ public:
     assert(has_allocation(dev));
 
     data_allocation<Memory_descriptor> found_alloc;
-    bool was_found = _allocations.select_and_handle(
+
+    [[maybe_unused]] bool was_found = _allocations.select_and_handle(
         default_allocation_selector{dev}, [&](const auto &alloc) {
           found_alloc = alloc;
     });
 
     assert(was_found);
+
     return found_alloc;
   }
 
@@ -714,7 +701,7 @@ private:
       new_alloc.invalid_pages.remove(std::make_pair(id<3>{0, 0, 0}, _num_pages));
     }
 
-    bool was_inserted = _allocations.add_if_unique(
+    [[maybe_unused]] bool was_inserted = _allocations.add_if_unique(
         default_allocation_comparator{}, std::move(new_alloc));
 
     // If another thread has added an allocation for this device in the meantime

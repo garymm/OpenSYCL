@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/runtime/error.hpp"
 #include "hipSYCL/runtime/ocl/ocl_hardware_manager.hpp"
 #include "hipSYCL/runtime/ocl/ocl_usm.hpp"
@@ -45,7 +28,7 @@ ResultT info_query(const cl::Device& dev) {
   cl_int err = dev.getInfo(Query, &r);
   if(err != CL_SUCCESS) {
     register_error(
-          __hipsycl_here(),
+          __acpp_here(),
           error_info{"ocl_usm: Could not obtain device info",
                     error_code{"CL", err}});
   }
@@ -178,15 +161,12 @@ public:
 
     out.is_from_host_backend = false;
     out.is_optimized_host = false;
+    out.is_usm = false;
 
     if(err != CL_SUCCESS)
       return err;
 
-    if(mem_type == CL_MEM_TYPE_HOST_INTEL)
-      out.is_optimized_host = true;
-    else if(mem_type == CL_MEM_TYPE_SHARED_INTEL)
-      out.is_usm = true;
-    else if(mem_type == CL_MEM_TYPE_DEVICE_INTEL) {
+    auto query_device = [&](rt::device_id& out) {
       cl_device_id dev;
       err = _mem_alloc_info(_ctx.get(), ptr, CL_MEM_ALLOC_DEVICE_INTEL,
                                  sizeof(dev), &dev, nullptr);
@@ -196,15 +176,30 @@ public:
       
       bool found = false;
       for(std::size_t i = 0; i < _hw_mgr->get_num_devices(); ++i) {
-        ocl_hardware_context* ctx = static_cast<ocl_hardware_context*>(_hw_mgr->get_device(i));
+        ocl_hardware_context *ctx =
+            static_cast<ocl_hardware_context *>(_hw_mgr->get_device(i));
         if(ctx->get_cl_device().get() == dev) {
           found = true;
-          out.dev = _hw_mgr->get_device_id(i);
+          out = _hw_mgr->get_device_id(i);
         }
       }
       if(!found) {
         return CL_INVALID_MEM_OBJECT;
       }
+      return CL_SUCCESS;
+    };
+
+    if(mem_type == CL_MEM_TYPE_HOST_INTEL)
+      out.is_optimized_host = true;
+    else if(mem_type == CL_MEM_TYPE_SHARED_INTEL) {
+      out.is_usm = true;
+      err = query_device(out.dev);
+      if(err != CL_SUCCESS)
+        return err;
+    } else if(mem_type == CL_MEM_TYPE_DEVICE_INTEL) {
+      err = query_device(out.dev);
+      if(err != CL_SUCCESS)
+        return err;
     } else {
       return CL_INVALID_MEM_OBJECT;
     }
@@ -251,6 +246,23 @@ public:
     return err;
   }
 
+  cl_int enqueue_prefetch(cl::CommandQueue &queue, const void *ptr,
+                          std::size_t bytes,
+                          cl_mem_migration_flags flags,
+                          const std::vector<cl::Event> &wait_events,
+                          cl::Event *event) override {
+    cl_event tmp;
+    cl_int err = _migrate_mem(
+        queue.get(), ptr, bytes, flags, wait_events.size(),
+        (wait_events.size() > 0) ? (cl_event *)&wait_events.front() : nullptr,
+        (event != nullptr) ? &tmp : nullptr);
+
+    if(event != nullptr && err == CL_SUCCESS) {
+      *event = tmp;
+    }
+    return err;
+  }
+
   cl_int enable_indirect_usm_access(cl::Kernel& k) override {
     auto maybe_ignore = [this](cl_int error_code) {
       // Intel CPU OpenCL seems to not understand these flags. We can just ignore USM errors
@@ -279,7 +291,7 @@ private:
     out = (Func)clGetExtensionFunctionAddressForPlatform(id, name);
     if (!out) {
       print_error(
-          __hipsycl_here(),
+          __acpp_here(),
           error_info{"ocl_usm_extension: Platform advertises USM support, but "
                      "extracting function address for " +
                      std::string{name} + " failed."});
@@ -426,6 +438,27 @@ public:
     unsigned char pattern_byte = static_cast<char>(pattern);
     return queue.enqueueMemFillSVM(ptr, pattern_byte, bytes, &wait_events, out);
   }
+
+
+  cl_int enqueue_prefetch(cl::CommandQueue &queue, const void *ptr,
+                          std::size_t bytes,
+                          cl_mem_migration_flags flags,
+                          const std::vector<cl::Event> &wait_events,
+                          cl::Event *event) override {
+    // Seems there is a bug in CommandQueue::enqueueMigrateSVM, so we directly
+    // call the OpenCL function
+    cl_event tmp;
+    cl_int err = ::clEnqueueSVMMigrateMem(
+        queue.get(), 1, &ptr, &bytes, flags, wait_events.size(),
+        (wait_events.size() > 0) ? (cl_event *)&wait_events.front() : nullptr,
+        (event != nullptr) ? &tmp : nullptr);
+    
+    if(event != nullptr && err == CL_SUCCESS) {
+      *event = tmp;
+    }
+    return err;
+  }
+
 
   cl_int enable_indirect_usm_access(cl::Kernel& k) override {
     return k.setExecInfo(CL_KERNEL_EXEC_INFO_SVM_FINE_GRAIN_SYSTEM, cl_bool{true});

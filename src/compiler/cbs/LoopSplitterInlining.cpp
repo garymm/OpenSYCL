@@ -1,34 +1,17 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/cbs/LoopSplitterInlining.hpp"
 #include "hipSYCL/compiler/cbs/IRUtils.hpp"
 #include "hipSYCL/compiler/cbs/SplitterAnnotationAnalysis.hpp"
+#include "hipSYCL/compiler/utils/LLVMUtils.hpp"
 
 #include "hipSYCL/common/debug.hpp"
 
@@ -36,6 +19,7 @@
 #include <llvm/Transforms/Utils/Cloning.h>
 
 namespace {
+using namespace hipsycl::compiler::cbs;
 
 bool inlineCallsInBasicBlock(llvm::BasicBlock &BB,
                              const llvm::SmallPtrSet<llvm::Function *, 8> &SplitterCallers,
@@ -55,8 +39,7 @@ bool inlineCallsInBasicBlock(llvm::BasicBlock &BB,
             if (LastChanged)
               break;
           } else if (SAA.isSplitterFunc(CallI->getCalledFunction()) &&
-                     CallI->getCalledFunction()->getName() !=
-                         hipsycl::compiler::BarrierIntrinsicName) {
+                     CallI->getCalledFunction()->getName() != BarrierIntrinsicName) {
             HIPSYCL_DEBUG_INFO << "[LoopSplitterInlining] Replace barrier with intrinsic: "
                                << CallI->getCalledFunction()->getName() << "\n";
             hipsycl::compiler::utils::createBarrier(CallI, SAA);
@@ -98,16 +81,18 @@ bool inlineCallsInFunction(llvm::Function &F,
 // todo: have a recursive-ness termination
 bool fillTransitiveSplitterCallers(llvm::Function &F,
                                    const hipsycl::compiler::SplitterAnnotationInfo &SAA,
-                                   llvm::SmallPtrSet<llvm::Function *, 8> &FuncsWSplitter);
+                                   llvm::SmallPtrSet<llvm::Function *, 8> &FuncsWSplitter,
+                                   bool InIntrinsic = false);
 bool fillTransitiveSplitterCallers(llvm::ArrayRef<llvm::BasicBlock *> Blocks,
                                    const hipsycl::compiler::SplitterAnnotationInfo &SAA,
-                                   llvm::SmallPtrSet<llvm::Function *, 8> &FuncsWSplitter) {
+                                   llvm::SmallPtrSet<llvm::Function *, 8> &FuncsWSplitter,
+                                   bool InIntrinsic) {
   bool Found = false;
   for (auto *BB : Blocks) {
     for (auto &I : *BB) {
       if (auto *CallI = llvm::dyn_cast<llvm::CallBase>(&I)) {
         if (CallI->getCalledFunction() &&
-            fillTransitiveSplitterCallers(*CallI->getCalledFunction(), SAA, FuncsWSplitter))
+            fillTransitiveSplitterCallers(*CallI->getCalledFunction(), SAA, FuncsWSplitter, InIntrinsic))
           Found = true;
       }
     }
@@ -119,20 +104,24 @@ bool fillTransitiveSplitterCallers(llvm::ArrayRef<llvm::BasicBlock *> Blocks,
 // todo: have a recursive-ness termination
 bool fillTransitiveSplitterCallers(llvm::Function &F,
                                    const hipsycl::compiler::SplitterAnnotationInfo &SAA,
-                                   llvm::SmallPtrSet<llvm::Function *, 8> &FuncsWSplitter) {
-  if (F.isDeclaration() && !F.isIntrinsic()) {
-    HIPSYCL_DEBUG_WARNING << "[LoopSplitterInlining] " << F.getName() << " is not defined!\n";
-  }
+                                   llvm::SmallPtrSet<llvm::Function *, 8> &FuncsWSplitter,
+                                   bool InIntrinsic) {
   if (SAA.isSplitterFunc(&F)) {
     FuncsWSplitter.insert(&F);
     return true;
   } else if (FuncsWSplitter.find(&F) != FuncsWSplitter.end())
     return true;
 
+  if (F.isDeclaration() && !F.isIntrinsic() && !InIntrinsic) {
+    HIPSYCL_DEBUG_WARNING << "[LoopSplitterInlining] " << F.getName() << " is not defined!\n";
+  }
+
   llvm::SmallVector<llvm::BasicBlock *, 8> Blocks;
   std::transform(F.begin(), F.end(), std::back_inserter(Blocks), [](auto &BB) { return &BB; });
 
-  if (fillTransitiveSplitterCallers(Blocks, SAA, FuncsWSplitter)) {
+  if (fillTransitiveSplitterCallers(Blocks, SAA, FuncsWSplitter,
+                                    InIntrinsic ||
+				    hipsycl::llvmutils::starts_with(F.getName(), "__acpp_sscp"))) {
     FuncsWSplitter.insert(&F);
     return true;
   }
